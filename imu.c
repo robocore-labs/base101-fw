@@ -22,8 +22,20 @@ bool imu_begin(void) {
     gpio_pull_up(LINK101_PIN_SCL);
 
     sensor_ready = link101_lsm6dsox_init(&sensor, IMU_I2C, IMU_ADDR);
-    status_printf("[imu  ] LSM6DSOX at 0x%02X: %s\n", IMU_ADDR,
-                  sensor_ready ? "online" : "no response");
+    if (!sensor_ready) {
+        // SDO/SA0 picks the low address bit. If the board strap doesn't
+        // match what robot.h assumes -- a revision difference, or a strap
+        // this firmware guessed wrong -- the chip answers at the other
+        // address instead of not answering at all. Try it before giving up.
+        sensor_ready = link101_lsm6dsox_init(&sensor, IMU_I2C, LINK101_LSM6DSOX_ADDR_ALT);
+        if (sensor_ready) {
+            status_printf("[imu  ] LSM6DSOX answered at 0x%02X, not the expected 0x%02X "
+                          "-- SDO/SA0 strap differs from robot.h\n",
+                          LINK101_LSM6DSOX_ADDR_ALT, IMU_ADDR);
+        }
+    }
+    status_printf("[imu  ] LSM6DSOX: %s\n",
+                  sensor_ready ? "online" : "no response at 0x6B or 0x6A");
 
     mag_ready = link101_mmc5983_init(&magnetometer, IMU_I2C, MAG_ADDR);
     status_printf("[imu  ] MMC5983MA at 0x%02X: %s\n", MAG_ADDR,
