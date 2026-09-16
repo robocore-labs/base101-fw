@@ -40,16 +40,16 @@ pico_sdk_init()
 # ---------------------------------------------------------------------------
 # Libraries
 #
-# Six of these are the link101 libraries (git submodules under lib/); the
-# seventh, easypicoros, brings Pico-ROS with it. Between them they are the
+# Five of these are the link101 libraries (git submodules under lib/); the
+# sixth, easypicoros, brings Pico-ROS with it. Between them they are the
 # board, the drivers, and the ROS stack:
 #
 #   pico_serial       the serial_t every driver speaks
 #   pico_cdc_serial   a USB CDC interface as one of those
-#   hardware_link101  the board: PIO/UART ports, pins, the LED strip
+#   hardware_link101  the board: PIO/UART ports, pins, the LED strip, the
+#                     onboard LSM6DSOX + MMC5983MA IMU
 #   pico_feetech      Feetech STS servos
 #   pico_ddsm         DDSM210 wheel motors
-#   pico_bno055       the IMU
 #   pico_zenoh        zenoh-pico for bare metal, over any serial_t
 #   easypicoros       ROS 2 publishers and subscribers on top of that
 #
@@ -72,7 +72,6 @@ add_subdirectory(${LINK101_LIBS}/pico_zenoh       pico_zenoh)
 add_subdirectory(${LINK101_LIBS}/hardware_link101 hardware_link101)
 add_subdirectory(${LINK101_LIBS}/pico_feetech     pico_feetech)
 add_subdirectory(${LINK101_LIBS}/pico_ddsm        pico_ddsm)
-add_subdirectory(${LINK101_LIBS}/pico_bno055      pico_bno055)
 add_subdirectory(${LINK101_LIBS}/easypicoros      easypicoros)
 
 # ---------------------------------------------------------------------------
@@ -110,7 +109,6 @@ target_link_libraries(base101_firmware
     pico_cdc_serial
     pico_feetech
     pico_ddsm
-    pico_bno055
     easypicoros
 )
 

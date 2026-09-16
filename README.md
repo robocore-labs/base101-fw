@@ -15,7 +15,7 @@ this board is another node in the graph.
 ◄──────────►│    sub  base_cmd  ──► 4x DDSM210, one PIO UART each              │──► wheels
             │    sub  arm_cmd   ──► Feetech servos on the half-duplex bus      │──► arm
             │    pub  joint_states, motor_telemetry/*                          │
-            │    pub  imu/data, imu/mag, imu/temperature ◄── BNO055 (i2c1)     │
+            │    pub  imu/data, imu/mag, imu/temperature ◄── onboard IMU (i2c1)│
  USB CDC #1 │                                                                  │
 ◄──────────►│  passthrough ◄──────────────────────────────────► uart1          │──► RPLidar C1
  USB CDC #2 │                                                                  │
@@ -37,7 +37,7 @@ The rest is one file per thing, ~100 lines each, readable in any order:
 | [`main.c`](main.c) | `setup()` then `loop()`. The whole shape of the firmware. |
 | [`wheels.c`](wheels.c) | The four drive wheels: speed in, angle out. |
 | [`servos.c`](servos.c) | The arm: angle in, angle and telemetry out. |
-| [`imu.c`](imu.c) | The BNO055, in fusion mode. |
+| [`imu.c`](imu.c) | The onboard LSM6DSOX + MMC5983MA. |
 | [`lidar.c`](lidar.c) | Bytes between USB CDC #1 and uart1. |
 | [`ros.c`](ros.c) | Publishers, subscribers, and what goes out when. |
 | [`status.c`](status.c) | The boot log, and the LED that breathes while the loop turns. |
@@ -57,9 +57,9 @@ library, in `lib/` as a submodule. See [Libraries](#libraries).
 | pub | `/motor_telemetry/<joint>/voltage` | `std_msgs/Float32` | servo voltage, V |
 | pub | `/motor_telemetry/<joint>/load` | `std_msgs/Float32` | servo load, % |
 | pub | `/motor_telemetry/<joint>/temperature` | `std_msgs/Int32` | servo temperature, °C |
-| pub | `/imu/data` | `sensor_msgs/Imu` | fused orientation + rates, 50 Hz |
+| pub | `/imu/data` | `sensor_msgs/Imu` | angular velocity + acceleration, 50 Hz |
 | pub | `/imu/mag` | `sensor_msgs/MagneticField` | magnetometer, tesla |
-| pub | `/imu/temperature` | `sensor_msgs/Temperature` | chip temperature, °C |
+| pub | `/imu/temperature` | `sensor_msgs/Temperature` | IMU die temperature, °C |
 
 Command arrays are in the order of the `WHEELS` and `SERVOS` tables in
 `robot.h`; reorder a table and both the command array and the joint_states
@@ -76,9 +76,17 @@ Worth knowing:
 - **Missing hardware is not fatal.** Whatever doesn't answer at boot is
   logged and skipped; its topics still exist and simply stay empty. No fake
   data is ever published.
+- **`/imu/data` carries no orientation.** The onboard IMU is a raw 6-axis
+  sensor with no fusion engine, so the message sets
+  `orientation_covariance[0] = -1` — the `sensor_msgs/Imu` way of saying the
+  quaternion is meaningless — and leaves the quaternion zeroed. Run
+  `imu_filter_madgwick` or `robot_localization` on the host against
+  `/imu/data` + `/imu/mag` if you need attitude. (The previous firmware
+  published a fused quaternion because it used a BNO055 on the Qwiic
+  connector, which does fusion on-chip.)
 - `linear_acceleration` includes gravity, per the `sensor_msgs/Imu`
-  convention. Covariances are the fixed nominal diagonals in `robot.h` — the
-  BNO055 reports no per-axis variance.
+  convention. Covariances are the fixed nominal diagonals in `robot.h` —
+  neither chip reports per-axis variance.
 
 ## Hardware
 
@@ -87,7 +95,7 @@ Worth knowing:
 | Servo bus | TX 7, RX 8, TXEN 16 | Feetech STS/SCS, half duplex, 1 Mbaud. Board-fixed. |
 | Wheels | GP19–26 | Four PIO UARTs, 115200. One motor per port — a DDSM210 can't share a TX line. |
 | Lidar | TX 4, RX 5 | hardware `uart1`, 460800 (RPLidar C1) |
-| IMU | SDA 14, SCL 15 | `i2c1`, address 0x28 |
+| IMU | SDA 14, SCL 15 | `i2c1`: LSM6DSOX at 0x6B, MMC5983MA at 0x30. Both soldered to the board; the Qwiic connector is the same bus. |
 | LED strip | GP18 | six WS2812 pixels |
 
 PIO state machines are claimed at init, not assigned by hand: 2 for the
@@ -209,10 +217,9 @@ Everything below the robot is a library, pulled in as a submodule under
 |---|---|
 | [`pico_serial`](https://github.com/robocore-labs/pico_serial) | The `serial_t` interface every driver speaks, and `serial_hook.h`. |
 | [`pico_cdc_serial`](https://github.com/robocore-labs/pico_cdc_serial) | A USB CDC interface as a `serial_t`. The one place USB stops. |
-| [`hardware_link101`](https://github.com/robocore-labs/hardware_link101) | The board: PIO and UART ports, pin map, LED strip, CAN. |
+| [`hardware_link101`](https://github.com/robocore-labs/hardware_link101) | The board: PIO and UART ports, pin map, LED strip, CAN, and the onboard LSM6DSOX + MMC5983MA. |
 | [`pico_feetech`](https://github.com/robocore-labs/pico_feetech) | Feetech STS/SCS servos. |
 | [`pico_ddsm`](https://github.com/robocore-labs/pico_ddsm) | DDSM210 wheel motors. |
-| [`pico_bno055`](https://github.com/robocore-labs/pico_bno055) | The IMU. |
 | [`pico_zenoh`](https://github.com/robocore-labs/pico_zenoh) | zenoh-pico for bare metal, over any `serial_t`. |
 | [`easypicoros`](https://github.com/robocore-labs/easyp) | Typed ROS publishers and subscribers on top of Pico-ROS. |
 

@@ -3,11 +3,16 @@
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
 
+#include "link101/lsm6dsox.h"
+#include "link101/mmc5983.h"
+
 #include "robot.h"
 #include "status.h"
 
-static bno055_t sensor;
-static bool     ready;
+static link101_lsm6dsox_t sensor;
+static link101_mmc5983_t  magnetometer;
+static bool               sensor_ready;
+static bool               mag_ready;
 
 bool imu_begin(void) {
     i2c_init(IMU_I2C, IMU_I2C_BAUD);
@@ -16,17 +21,40 @@ bool imu_begin(void) {
     gpio_pull_up(LINK101_PIN_SDA);
     gpio_pull_up(LINK101_PIN_SCL);
 
-    // bno055_init retries for a few hundred ms -- the chip boots slowly.
-    ready = bno055_init(&sensor, IMU_I2C, IMU_ADDR);
-    status_printf("[imu  ] BNO055 at 0x%02X: %s\n", IMU_ADDR,
-                  ready ? "online" : "no response");
-    return ready;
+    sensor_ready = link101_lsm6dsox_init(&sensor, IMU_I2C, IMU_ADDR);
+    status_printf("[imu  ] LSM6DSOX at 0x%02X: %s\n", IMU_ADDR,
+                  sensor_ready ? "online" : "no response");
+
+    mag_ready = link101_mmc5983_init(&magnetometer, IMU_I2C, MAG_ADDR);
+    status_printf("[imu  ] MMC5983MA at 0x%02X: %s\n", MAG_ADDR,
+                  mag_ready ? "online" : "no response");
+
+    return sensor_ready || mag_ready;
 }
 
 bool imu_online(void) {
-    return ready;
+    return sensor_ready;
 }
 
-bool imu_read(bno055_sample_t *out) {
-    return ready && bno055_read(&sensor, out);
+bool imu_mag_online(void) {
+    return mag_ready;
+}
+
+bool imu_read(imu_sample_t *out) {
+    if (!sensor_ready) {
+        return false;
+    }
+    if (!link101_lsm6dsox_read(&sensor, out->accel, out->gyro)) {
+        return false;
+    }
+    // Temperature is a separate register block and nobody minds if it is a
+    // sample behind, so a failure here doesn't spoil the reading.
+    if (!link101_lsm6dsox_read_temperature(&sensor, &out->temp_c)) {
+        out->temp_c = 0.0f;
+    }
+    return true;
+}
+
+bool imu_read_magnetic_field(float tesla[3]) {
+    return mag_ready && link101_mmc5983_read(&magnetometer, tesla);
 }

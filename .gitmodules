@@ -16,9 +16,6 @@
 [submodule "lib/pico_ddsm"]
 	path = lib/pico_ddsm
 	url = git@github.com:robocore-labs/pico_ddsm.git
-[submodule "lib/pico_bno055"]
-	path = lib/pico_bno055
-	url = git@github.com:robocore-labs/pico_bno055.git
 [submodule "lib/easypicoros"]
 	path = lib/easypicoros
 	url = git@github.com:robocore-labs/easyp.git

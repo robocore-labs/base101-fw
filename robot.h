@@ -32,9 +32,12 @@
 #define LIDAR_RX_PIN    5
 #define LIDAR_BAUD      460800      // RPLidar C1 default
 
-// BNO055 IMU on the Qwiic connector (i2c1 — pins from link101/pins.h).
+// The IMU soldered to the board: an LSM6DSOX (accel + gyro) and an
+// MMC5983MA magnetometer, both on i2c1 — the same bus as the Qwiic
+// connector. Addresses are fixed by the layout; see link101/pins.h.
 #define IMU_I2C         i2c1
-#define IMU_ADDR        0x28        // 0x29 if the ADR pad is tied high
+#define IMU_ADDR        LINK101_LSM6DSOX_I2C_ADDR   // 0x6B
+#define MAG_ADDR        LINK101_MMC5983_I2C_ADDR    // 0x30
 #define IMU_I2C_BAUD    400000      // fast mode
 
 // Feetech STS/SCS servo bus. Half duplex on the board's fixed pins; the
@@ -149,9 +152,13 @@ static const servo_cfg_t SERVOS[SERVO_COUNT] = {
 
 #define TELEMETRY_ENABLED true
 
-// The BNO055 reports no per-axis variance, so these nominal diagonals go out
+// Neither chip reports per-axis variance, so these nominal diagonals go out
 // with every sample. Off-diagonal terms are zero.
-#define IMU_ORIENTATION_COV  0.0159   // rad^2
+//
+// There is no orientation covariance because there is no orientation: the
+// LSM6DSOX does no fusion, so /imu/data sets orientation_covariance[0] = -1,
+// which is how sensor_msgs/Imu says "no orientation estimate". Fuse on the
+// host (imu_filter_madgwick, robot_localization) from imu/data + imu/mag.
 #define IMU_ANGULAR_VEL_COV  0.04     // (rad/s)^2
 #define IMU_LINEAR_ACC_COV   0.017    // (m/s^2)^2
 #define IMU_MAGNETIC_COV     0.0      // tesla^2 (0 = unknown)

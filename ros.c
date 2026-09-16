@@ -172,57 +172,59 @@ static void publish_servo_telemetry(void) {
 }
 #endif
 
-// One IMU sample goes out as three messages, which is how sensor_msgs
-// splits it: fused orientation + rates, the magnetometer, the chip
-// temperature.
+// The two chips are independent, so this publishes whatever answered: the
+// IMU feeds imu/data and imu/temperature, the magnetometer feeds imu/mag.
 static void publish_imu(void) {
-    bno055_sample_t sample;
-    if (!imu_read(&sample)) {
-        return;
-    }
     ros_Time stamp = now_stamp();
+    imu_sample_t sample;
 
-    ros_Imu imu;
-    memset(&imu, 0, sizeof(imu));
-    imu.header.stamp    = stamp;
-    imu.header.frame_id = IMU_FRAME_ID;
-    imu.orientation.w = sample.quat[0];
-    imu.orientation.x = sample.quat[1];
-    imu.orientation.y = sample.quat[2];
-    imu.orientation.z = sample.quat[3];
-    imu.angular_velocity.x = sample.gyro[0];
-    imu.angular_velocity.y = sample.gyro[1];
-    imu.angular_velocity.z = sample.gyro[2];
-    imu.linear_acceleration.x = sample.accel[0];
-    imu.linear_acceleration.y = sample.accel[1];
-    imu.linear_acceleration.z = sample.accel[2];
-    // Diagonal only: the chip reports no per-axis variance.
-    imu.orientation_covariance[0] = imu.orientation_covariance[4] =
-        imu.orientation_covariance[8] = IMU_ORIENTATION_COV;
-    imu.angular_velocity_covariance[0] = imu.angular_velocity_covariance[4] =
-        imu.angular_velocity_covariance[8] = IMU_ANGULAR_VEL_COV;
-    imu.linear_acceleration_covariance[0] = imu.linear_acceleration_covariance[4] =
-        imu.linear_acceleration_covariance[8] = IMU_LINEAR_ACC_COV;
-    easyp_publish(imu_pub, &imu);
+    if (imu_read(&sample)) {
+        ros_Imu imu;
+        memset(&imu, 0, sizeof(imu));
+        imu.header.stamp    = stamp;
+        imu.header.frame_id = IMU_FRAME_ID;
+        imu.angular_velocity.x = sample.gyro[0];
+        imu.angular_velocity.y = sample.gyro[1];
+        imu.angular_velocity.z = sample.gyro[2];
+        imu.linear_acceleration.x = sample.accel[0];
+        imu.linear_acceleration.y = sample.accel[1];
+        imu.linear_acceleration.z = sample.accel[2];
 
-    ros_MagneticField mag;
-    memset(&mag, 0, sizeof(mag));
-    mag.header.stamp    = stamp;
-    mag.header.frame_id = IMU_FRAME_ID;
-    mag.magnetic_field.x = sample.mag[0];
-    mag.magnetic_field.y = sample.mag[1];
-    mag.magnetic_field.z = sample.mag[2];
-    mag.magnetic_field_covariance[0] = mag.magnetic_field_covariance[4] =
-        mag.magnetic_field_covariance[8] = IMU_MAGNETIC_COV;
-    easyp_publish(imu_mag_pub, &mag);
+        // -1 in the first element is how sensor_msgs/Imu says "there is no
+        // orientation estimate in this message" -- the LSM6DSOX measures,
+        // it does not fuse. The quaternion is left zeroed; consumers are
+        // required to check this first and ignore it.
+        imu.orientation_covariance[0] = -1.0;
 
-    ros_Temperature temp;
-    memset(&temp, 0, sizeof(temp));
-    temp.header.stamp    = stamp;
-    temp.header.frame_id = IMU_FRAME_ID;
-    temp.temperature = (double)sample.temp_c;
-    temp.variance    = 0.0;
-    easyp_publish(imu_temp_pub, &temp);
+        // Diagonal only: neither chip reports per-axis variance.
+        imu.angular_velocity_covariance[0] = imu.angular_velocity_covariance[4] =
+            imu.angular_velocity_covariance[8] = IMU_ANGULAR_VEL_COV;
+        imu.linear_acceleration_covariance[0] = imu.linear_acceleration_covariance[4] =
+            imu.linear_acceleration_covariance[8] = IMU_LINEAR_ACC_COV;
+        easyp_publish(imu_pub, &imu);
+
+        ros_Temperature temp;
+        memset(&temp, 0, sizeof(temp));
+        temp.header.stamp    = stamp;
+        temp.header.frame_id = IMU_FRAME_ID;
+        temp.temperature = (double)sample.temp_c;
+        temp.variance    = 0.0;
+        easyp_publish(imu_temp_pub, &temp);
+    }
+
+    float field[3];
+    if (imu_read_magnetic_field(field)) {
+        ros_MagneticField mag;
+        memset(&mag, 0, sizeof(mag));
+        mag.header.stamp    = stamp;
+        mag.header.frame_id = IMU_FRAME_ID;
+        mag.magnetic_field.x = field[0];
+        mag.magnetic_field.y = field[1];
+        mag.magnetic_field.z = field[2];
+        mag.magnetic_field_covariance[0] = mag.magnetic_field_covariance[4] =
+            mag.magnetic_field_covariance[8] = IMU_MAGNETIC_COV;
+        easyp_publish(imu_mag_pub, &mag);
+    }
 }
 
 // ===========================================================================
