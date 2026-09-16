@@ -56,6 +56,13 @@ static void setup(void) {
 
     uint8_t found = wheels_begin();
     status_printf("[wheel] %u of %u wheels answered\n", found, WHEEL_COUNT);
+    // Start stopped, actively -- not in whatever state the motors happened
+    // to power up in. Matters most for a robot that lost power mid-drive:
+    // without this, a wheel could resume its last remembered speed the
+    // instant wheels_begin() puts it back in velocity mode.
+    for (uint8_t i = 0; i < WHEEL_COUNT; i++) {
+        wheels_brake(i);
+    }
 
 #if SERVOS_ENABLED
     found = servos_begin();
@@ -92,6 +99,7 @@ static void setup(void) {
 // the lidar moving, breathe.
 static void loop(void) {
     ros_update();
+    wheels_update();   // advance the speed ramp; rate-limits itself
     io_poll();
     status_update();
 }

@@ -81,8 +81,22 @@ static const wheel_cfg_t WHEELS[WHEEL_COUNT] = {
 // in joint_states. Reorder the rows and both follow.
 
 #define WHEEL_MAX_RPM     100    // command cap; the hardware will do 210
-#define WHEEL_ACCEL_TIME  20     // ramp, in units of 0.1 ms per RPM
+#define WHEEL_ACCEL_TIME  20     // the DDSM210's own ramp, 0.1 ms per RPM of change
 #define WHEEL_SPEED_SCALE 1.0    // fudge factor on commanded speed
+
+// base_cmd can step from one speed to a very different one between
+// messages -- reversing direction, or a sharp turn asking the two sides
+// for very different speeds -- and a wheel commanded straight to that new
+// target skids across the floor getting there instead of tracking it.
+// wheels_update() ramps the ACTUAL commanded speed toward whatever
+// base_cmd last asked for, at most this many rad/s of change per second,
+// regardless of how big the step in the command was. Lower feels gentler
+// and drags less on stops and turns; higher tracks the host more closely.
+#define WHEEL_ACCEL_LIMIT_RAD_S2   6.0
+
+// How often the ramp advances and (if it moved) sends a fresh speed --
+// matches the other control-loop rates below.
+#define WHEEL_CONTROL_HZ           50
 
 // ===========================================================================
 //  The arm
@@ -151,6 +165,20 @@ static const servo_cfg_t SERVOS[SERVO_COUNT] = {
 #define IMU_HZ           50
 
 #define TELEMETRY_ENABLED true
+
+// If nothing fresh arrives on base_cmd within this long, the wheels are
+// actively braked instead of left spinning at whatever they were last
+// told -- a host that stalls, crashes, or drops the ROS link mid-drive
+// should not leave the robot coasting on a stale command forever. Checked
+// at COMMAND_WATCHDOG_HZ, which also bounds how often a brake frame is
+// re-sent while the link stays down -- cheap insurance against the one
+// frame that mattered getting lost.
+//
+// The arm needs no equivalent: it is position-controlled, and a Feetech
+// servo already holds its last commanded position against gravity and
+// friction on its own, with or without new commands arriving.
+#define COMMAND_TIMEOUT_MS     500
+#define COMMAND_WATCHDOG_HZ    5
 
 // Neither chip reports per-axis variance, so these nominal diagonals go out
 // with every sample. Off-diagonal terms are zero.

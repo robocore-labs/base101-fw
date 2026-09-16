@@ -69,6 +69,18 @@ free — an unchanged value is not re-sent to the bus.
 
 Worth knowing:
 
+- **Wheel speed changes are ramped, not instant.** A `base_cmd` step --
+  reversing direction, or a turn asking the two sides for very different
+  speeds -- doesn't reach the motors as a jump. The actual commanded speed
+  moves toward whatever was last asked for at up to
+  `WHEEL_ACCEL_LIMIT_RAD_S2` (robot.h) rad/s², so the wheel can follow it
+  without skidding across the floor getting there. Lower that constant for
+  a gentler stop/turn, raise it to track the host more closely.
+- **A stale `base_cmd` brakes, hard, not ramped.** If nothing arrives for
+  `COMMAND_TIMEOUT_MS`, every wheel gets the DDSM210's active brake
+  immediately (not the gentle ramp above) — a host that stalls, crashes,
+  or drops the ROS link should not leave the robot coasting on the last
+  thing it heard.
 - **Stamps are time since boot.** The board has no RTC and nothing to sync
   one against. Re-stamp on the host if it matters.
 - **Every joint appears every time.** A motor that doesn't answer reports

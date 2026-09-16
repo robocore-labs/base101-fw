@@ -18,7 +18,12 @@ static link101_pio_serial_t ports[WHEEL_COUNT];
 static serial_hook_t        hooks[WHEEL_COUNT];
 static serial_t            *bus[WHEEL_COUNT];
 static bool                 online[WHEEL_COUNT];
-static double               last_command[WHEEL_COUNT];
+
+// What base_cmd last asked for, and what we're actually telling the motor
+// right now. wheels_update() closes the gap between them a little at a
+// time; everything else only ever touches target[].
+static double target[WHEEL_COUNT];
+static double current[WHEEL_COUNT];
 
 uint8_t wheels_begin(void) {
     uint8_t found = 0;
@@ -58,13 +63,24 @@ bool wheels_online(uint8_t index) {
 }
 
 void wheels_set_speed(uint8_t index, double rad_per_sec) {
+    if (index < WHEEL_COUNT) {
+        target[index] = rad_per_sec;
+    }
+}
+
+// Unit conversion + direction + cap, then the bus write for one wheel's
+// ramped speed. Exactly zero brakes -- actively, not just "coast down at
+// whatever rate the motor's own velocity loop feels like" -- which is
+// right here: by the time the ramp reaches zero, it got there gradually,
+// and now it should actually stop rather than drift.
+static void send_speed(uint8_t index, double rad_per_sec) {
     if (!wheels_online(index)) {
         return;
     }
-    if (fabs(rad_per_sec - last_command[index]) < 1e-6) {
-        return;   // same as last time; leave the bus alone
+    if (fabs(rad_per_sec) < 1e-6) {
+        ddsm210_brake(bus[index], WHEELS[index].id);
+        return;
     }
-    last_command[index] = rad_per_sec;
 
     const wheel_cfg_t *w = &WHEELS[index];
 
@@ -80,6 +96,46 @@ void wheels_set_speed(uint8_t index, double rad_per_sec) {
     if (units < -limit) units = -limit;
 
     ddsm210_set_velocity(bus[index], w->id, (int16_t)units, WHEEL_ACCEL_TIME, NULL);
+}
+
+void wheels_update(void) {
+    static uint64_t next_us = 0;
+
+    uint64_t now = time_us_64();
+    if (now < next_us) {
+        return;
+    }
+    next_us = now + 1000000u / WHEEL_CONTROL_HZ;
+
+    const double max_step = WHEEL_ACCEL_LIMIT_RAD_S2 / WHEEL_CONTROL_HZ;
+
+    for (uint8_t i = 0; i < WHEEL_COUNT; i++) {
+        if (!wheels_online(i)) {
+            continue;
+        }
+
+        double delta = target[i] - current[i];
+        if (delta ==  0.0) {
+            continue;   // already there; nothing to send
+        }
+        if (delta >  max_step) delta =  max_step;
+        if (delta < -max_step) delta = -max_step;
+
+        current[i] += delta;
+        if (fabs(current[i]) < 1e-6) {
+            current[i] = 0.0;   // settle exactly, so the zero case below fires
+        }
+        send_speed(i, current[i]);
+    }
+}
+
+void wheels_brake(uint8_t index) {
+    if (!wheels_online(index)) {
+        return;
+    }
+    target[index]  = 0.0;
+    current[index] = 0.0;   // stop now, not "start ramping toward zero"
+    ddsm210_brake(bus[index], WHEELS[index].id);
 }
 
 double wheels_read_angle(uint8_t index) {

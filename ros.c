@@ -56,11 +56,19 @@ static ros_Float64MultiArray   base_message = {
     .data = { .data = base_values, .n_elements = CMD_MAX_VALUES },
 };
 
+// Set whenever a base_cmd arrives; read by the watchdog in ros_update() to
+// notice when they stop. Starts at 0 (time since boot), which is already
+// in the past the moment the main loop runs -- so a robot that never
+// receives a single base_cmd is "stale" from boot, same as one that was
+// receiving them and stopped. Either way, the answer is brake.
+static uint64_t last_base_cmd_us = 0;
+
 // Wheel speeds, in rad/s, in the order of the WHEELS table.
 static void on_base_cmd(void *msg, void *unused) {
     (void)unused;
     ros_Float64MultiArray *cmd = msg;
 
+    last_base_cmd_us = time_us_64();
     for (uint8_t i = 0; i < WHEEL_COUNT && i < cmd->data.n_deserialized; i++) {
         wheels_set_speed(i, cmd->data.data[i]);
     }
@@ -324,6 +332,25 @@ static bool due(uint64_t *deadline_us, uint32_t hz) {
     return true;
 }
 
+// Command watchdog: base_cmd going quiet for longer than COMMAND_TIMEOUT_MS
+// means the host stalled, crashed, or lost the link -- not that it wants
+// the wheels to keep doing whatever they were last told forever. Brake
+// keeps being re-sent at COMMAND_WATCHDOG_HZ for as long as the silence
+// lasts, so one dropped frame doesn't leave a wheel spinning.
+static void base_cmd_watchdog(void) {
+    static uint64_t check_due = 0;
+
+    if (!due(&check_due, COMMAND_WATCHDOG_HZ)) {
+        return;
+    }
+    if (time_us_64() - last_base_cmd_us < (uint64_t)COMMAND_TIMEOUT_MS * 1000) {
+        return;   // heard from the host recently enough
+    }
+    for (uint8_t i = 0; i < WHEEL_COUNT; i++) {
+        wheels_brake(i);
+    }
+}
+
 void ros_update(void) {
     static uint64_t joint_states_due = 0;
     static uint64_t telemetry_due    = 0;
@@ -331,6 +358,8 @@ void ros_update(void) {
 
     // Receive first: command callbacks fire from in here.
     easyp_spin_once();
+
+    base_cmd_watchdog();
 
     if (due(&joint_states_due, JOINT_STATES_HZ)) {
         publish_joint_states();
