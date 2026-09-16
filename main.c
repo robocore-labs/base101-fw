@@ -19,7 +19,7 @@
  *   4x PIO UART  one DDSM210 wheel motor each     (wheels.c)
  *   servo bus    the Feetech arm, half duplex     (servos.c)
  *   uart1        RPLidar C1                       (lidar.c)
- *   i2c1         BNO055 IMU                       (imu.c)
+ *   i2c1         onboard LSM6DSOX + MMC5983MA IMU (imu.c)
  *
  * Everything you would want to change -- pins, motor IDs, joint names,
  * rates, topic names -- is in robot.h. Start there.

@@ -37,6 +37,26 @@ bool imu_begin(void) {
     status_printf("[imu  ] LSM6DSOX: %s\n",
                   sensor_ready ? "online" : "no response at 0x6B or 0x6A");
 
+    if (!sensor_ready) {
+        // Both addresses failed init(), which only ever says "no" -- not
+        // *why*. This says why: whether nothing is on the bus at either
+        // address at all, or something is, just not what we expected.
+        // Whichever it is, the next line pins it down instead of guessing.
+        uint8_t id;
+        if (link101_lsm6dsox_probe(IMU_I2C, IMU_ADDR, &id)) {
+            status_printf("[imu  ]   0x%02X: answered, WHO_AM_I=0x%02X (expected 0x%02X)\n",
+                          IMU_ADDR, id, LINK101_LSM6DSOX_WHO_AM_I);
+        } else {
+            status_printf("[imu  ]   0x%02X: no ack at all\n", IMU_ADDR);
+        }
+        if (link101_lsm6dsox_probe(IMU_I2C, LINK101_LSM6DSOX_ADDR_ALT, &id)) {
+            status_printf("[imu  ]   0x%02X: answered, WHO_AM_I=0x%02X (expected 0x%02X)\n",
+                          LINK101_LSM6DSOX_ADDR_ALT, id, LINK101_LSM6DSOX_WHO_AM_I);
+        } else {
+            status_printf("[imu  ]   0x%02X: no ack at all\n", LINK101_LSM6DSOX_ADDR_ALT);
+        }
+    }
+
     mag_ready = link101_mmc5983_init(&magnetometer, IMU_I2C, MAG_ADDR);
     status_printf("[imu  ] MMC5983MA at 0x%02X: %s\n", MAG_ADDR,
                   mag_ready ? "online" : "no response");
