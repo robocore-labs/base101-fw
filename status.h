@@ -1,13 +1,17 @@
 /*
  * Telling the human what is going on: the debug port and the LED strip.
  *
- * Two ways of saying the same thing. status_printf() narrates the boot over
- * USB CDC #2 -- what was found, what answered, what didn't -- and the LED
- * strip breathes blue for as long as the main loop keeps turning.
+ * status_printf() narrates the boot over USB CDC #2 -- what was found, what
+ * answered, what didn't. The LED strip says the same thing from across the
+ * room, in the only two states that matter once the boot log is gone:
+ *
+ *   STATUS_WAITING   fast yellow blink -- no ROS router yet
+ *   STATUS_READY     slow green breath -- connected and running
  *
  * Once zenoh is up the debug port goes quiet (status_quiet()), because in
  * steady state every byte of USB bandwidth belongs to the transport. The
- * LED keeps breathing, so the board still tells you it is alive.
+ * LED carries on, so the board still tells you it is alive -- and if it
+ * ever stops moving, the main loop stopped turning.
  */
 
 #ifndef STATUS_H
@@ -15,8 +19,18 @@
 
 #include <stdbool.h>
 
-// Claim the LED strip. USB is already up by this point; see io_begin().
+typedef enum {
+    STATUS_WAITING = 0,   // waiting for the ROS router
+    STATUS_READY,         // connected and running
+} status_mode_t;
+
+// Claim the LED strip, starting in STATUS_WAITING. USB is already up by
+// this point; see io_begin().
 void status_begin(void);
+
+// Switch what the strip is saying. Takes effect on the next
+// status_update().
+void status_set_mode(status_mode_t mode);
 
 // Print a line to the debug port. For boot narration and state changes --
 // not for per-message traffic. Bytes are dropped rather than blocking when

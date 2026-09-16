@@ -40,7 +40,7 @@ The rest is one file per thing, ~100 lines each, readable in any order:
 | [`imu.c`](imu.c) | The onboard LSM6DSOX + MMC5983MA. |
 | [`lidar.c`](lidar.c) | Bytes between USB CDC #1 and uart1. |
 | [`ros.c`](ros.c) | Publishers, subscribers, and what goes out when. |
-| [`status.c`](status.c) | The boot log, and the LED that breathes while the loop turns. |
+| [`status.c`](status.c) | The boot log, and what the LED strip is saying. |
 | [`io.c`](io.c) | USB, and the heartbeat every blocking wait runs. |
 
 Everything below that — the board, the drivers, zenoh, the ROS layer — is a
@@ -136,9 +136,17 @@ what answered:
 ```
 
 It stops there on purpose: in steady state every byte of USB bandwidth
-belongs to the zenoh transport. **The LED is the liveness signal** — it
-breathes for as long as the main loop turns, so a frozen strip means frozen
-firmware.
+belongs to the zenoh transport. **The LED takes over from there:**
+
+| Strip | Means |
+|---|---|
+| fast yellow blink | waiting for the ROS router — nothing else can start |
+| slow green breath | connected and running |
+| frozen | the main loop stopped turning |
+
+It is driven from the main loop and from inside every blocking wait, so it
+keeps moving even while the board waits for a router that isn't up yet.
+Colours and rates are in `robot.h`.
 
 ## Host setup
 

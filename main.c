@@ -66,8 +66,10 @@ static void setup(void) {
 
     imu_begin();
 
-    // Blocks until the router is up. USB and the lidar keep running while
-    // it waits, so the board stays usable however long that takes.
+    // Blocks until the router is up -- the strip blinks yellow throughout,
+    // which is the only signal you get once the boot log has scrolled past.
+    // USB and the lidar keep running while it waits, so the board stays
+    // usable however long that takes.
     if (!ros_begin()) {
         status_printf("[ros  ] FATAL: could not declare the node\n");
         while (true) {
@@ -75,6 +77,9 @@ static void setup(void) {
             status_update();
         }
     }
+
+    // Connected: green from here, and slow.
+    status_set_mode(STATUS_READY);
 
     // From here on the debug port would be competing with zenoh for USB
     // bandwidth, and zenoh wins. The LED keeps breathing; that is how you

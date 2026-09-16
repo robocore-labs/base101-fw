@@ -167,13 +167,24 @@ static const servo_cfg_t SERVOS[SERVO_COUNT] = {
 //  Status LED
 // ===========================================================================
 //
-// The six-pixel strip breathes blue while the firmware is alive. It is
-// driven from the main loop, so a strip that stops breathing means a loop
-// that stopped turning -- which is the point of it.
+// The six-pixel strip says what the firmware is doing, from across the room:
+//
+//   fast yellow blink   waiting for the ROS router -- nothing else can start
+//   slow green breath   connected, running
+//
+// Either way it is driven from the main loop, so a strip that stops moving
+// means a loop that stopped turning. That is half the point of it.
 
 #define LED_ENABLED     true
-#define LED_PERIOD_MS   3000   // one full breath, in and out
-#define LED_MIN         3      // channel value at the dimmest point
-#define LED_MAX         40     // and at the brightest (kept low on purpose)
+
+// Waiting: a blink, not a breath. It should read as "waiting on you".
+#define LED_WAITING_PERIOD_MS 400    // one on/off cycle
+#define LED_WAITING_R         40     // yellow, weighted warm -- the green
+#define LED_WAITING_G         26     // die is the brighter of the two
+
+// Connected: a slow breath, calm enough to ignore.
+#define LED_READY_PERIOD_MS   3000   // one full breath, in and out
+#define LED_MIN               3      // channel value at the dimmest point
+#define LED_MAX               40     // and at the brightest (kept low on purpose)
 
 #endif // ROBOT_H
