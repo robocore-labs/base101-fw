@@ -80,7 +80,7 @@ static const wheel_cfg_t WHEELS[WHEEL_COUNT] = {
 // The order above IS the order of the base_cmd array and of the wheel slots
 // in joint_states. Reorder the rows and both follow.
 
-#define WHEEL_MAX_RPM     100    // command cap; the hardware will do 210
+#define WHEEL_MAX_RPM     200    // command cap; the hardware ceiling is 210
 #define WHEEL_ACCEL_TIME  20     // the DDSM210's own ramp, 0.1 ms per RPM of change
 #define WHEEL_SPEED_SCALE 1.0    // fudge factor on commanded speed
 
