@@ -3,29 +3,19 @@
  * ============================================================
  *
  * The robot's motor control runs here, on the board, and the host talks to
- * it in ROS: it subscribes to command topics and publishes joint states,
- * servo telemetry and IMU data over zenoh. There is no bridge process on
+ * it in ROS: /cmd_vel commands the drive wheels, and IMU data
+ * is published over zenoh. There is no bridge process on
  * the host and no serial protocol to speak -- with rmw_zenoh running, this
  * board is just another node in the graph.
  *
- *   USB port     What comes out of it
- *   ----------------------------------------------------------------
- *   CDC #0       zenoh: the ROS traffic
- *   CDC #1       the lidar, passed straight through
- *   CDC #2       this firmware's boot log, until zenoh comes up
- *
- *   Bus          What is on it
- *   ----------------------------------------------------------------
- *   4x PIO UART  one DDSM210 wheel motor each     (wheels.c)
- *   servo bus    the Feetech arm, half duplex     (servos.c)
- *   uart1        RPLidar C1                       (lidar.c)
- *   i2c1         onboard LSM6DSOX + MMC5983MA IMU (imu.c)
+ * USB exposes one CDC port, exclusively for zenoh. Status is shown by LEDs.
+ * Four PIO UARTs drive the DDSM210 wheels; i2c1 hosts the onboard IMU.
  *
  * Everything you would want to change -- pins, motor IDs, joint names,
  * rates, topic names -- is in robot.h. Start there.
  *
  * Read the rest in this order: main.c for the shape, then robot.h for the
- * robot, then whichever of wheels.c / servos.c / imu.c / lidar.c / ros.c
+ * robot, then whichever of wheels.c / imu.c / ros.c
  * you care about. Each one is about a hundred lines and stands alone.
  */
 
@@ -33,26 +23,17 @@
 
 #include "imu.h"
 #include "io.h"
-#include "lidar.h"
 #include "robot.h"
 #include "ros.h"
-#include "servos.h"
 #include "status.h"
 #include "wheels.h"
 
-// Bring the robot up, narrating to the debug port as we go. Anything that
-// doesn't answer is reported and skipped -- a missing servo or an
-// unplugged lidar is not a reason to refuse to boot.
+// Bring the robot up. Missing wheels and sensors are skipped.
 static void setup(void) {
-    io_begin();        // USB first, so the rest of this is readable on CDC #2
+    io_begin();        // Bring up the sole USB CDC port for zenoh.
     status_begin();
 
     status_printf("\n\n=== base101 firmware ===\n");
-    status_printf("[boot ] USB up: CDC0 zenoh, CDC1 lidar, CDC2 this log\n");
-
-    lidar_begin();
-    status_printf("[lidar] uart1 on GP%u/%u at %u baud\n",
-                  LIDAR_TX_PIN, LIDAR_RX_PIN, LIDAR_BAUD);
 
     uint8_t found = wheels_begin();
     status_printf("[wheel] %u of %u wheels answered\n", found, WHEEL_COUNT);
@@ -64,18 +45,13 @@ static void setup(void) {
         wheels_brake(i);
     }
 
-#if SERVOS_ENABLED
-    found = servos_begin();
-    status_printf("[servo] %u of %u servos answered\n", found, SERVO_COUNT);
-#else
-    status_printf("[servo] arm switched off in robot.h\n");
-#endif
+
 
     imu_begin();
 
     // Blocks until the router is up -- the strip blinks yellow throughout,
-    // which is the only signal you get once the boot log has scrolled past.
-    // USB and the lidar keep running while it waits, so the board stays
+    // which shows that initialization is waiting for the router.
+    // USB keeps running while it waits, so the board stays
     // usable however long that takes.
     if (!ros_begin()) {
         status_printf("[ros  ] FATAL: could not declare the node\n");
@@ -85,21 +61,17 @@ static void setup(void) {
         }
     }
 
-    // Connected: green from here, and slow.
-    status_set_mode(STATUS_READY);
+    // Connected; stay yellow until stationary gyro calibration succeeds.
+    status_set_mode(STATUS_WAITING);
 
-    // From here on the debug port would be competing with zenoh for USB
-    // bandwidth, and zenoh wins. The LED keeps breathing; that is how you
-    // know the loop below is still turning.
-    status_printf("[boot ] up. Going quiet -- watch the LED, or the ROS graph.\n");
-    status_quiet();
+
 }
 
-// The whole steady state: receive commands, publish state, keep USB and
-// the lidar moving, breathe.
+// Receive commands, publish sensor data, service USB, and breathe.
 static void loop(void) {
     ros_update();
-    wheels_update();   // advance the speed ramp; rate-limits itself
+    wheels_update();   // shape body velocity and send wheel setpoints
+    imu_update();
     io_poll();
     status_update();
 }

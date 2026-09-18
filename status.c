@@ -11,7 +11,9 @@
 #include "robot.h"
 #include "usb_descriptors.h"
 
+#if defined(IMU_DIAGNOSTIC) || defined(MOTOR_TERMINAL)
 static bool s_printing = true;
+#endif
 static link101_rgb_t s_pixels[LINK101_NEOPIXEL_COUNT];
 static bool s_leds_ready;
 static status_mode_t s_mode = STATUS_WAITING;
@@ -33,10 +35,13 @@ void status_set_mode(status_mode_t mode) {
 }
 
 void status_quiet(void) {
+#if defined(IMU_DIAGNOSTIC) || defined(MOTOR_TERMINAL)
     s_printing = false;
+#endif
 }
 
 void status_printf(const char *fmt, ...) {
+#if defined(IMU_DIAGNOSTIC) || defined(MOTOR_TERMINAL)
     if (!s_printing) {
         return;
     }
@@ -58,9 +63,27 @@ void status_printf(const char *fmt, ...) {
     // otherwise see nothing. The write is non-blocking and drops bytes when
     // the FIFO fills, so an unread port costs nothing.
     if (tud_mounted()) {
+#ifdef IMU_DIAGNOSTIC
+        // Full bring-up traces must drain instead of silently filling the FIFO.
+        // Bound the wait so removing the host cannot hang the diagnostic.
+        uint64_t deadline = time_us_64() + 500000;
+        uint32_t sent = 0;
+        while (sent < (uint32_t)len && tud_mounted() && time_us_64() < deadline) {
+            sent += tud_cdc_n_write(CDC_IDX_DEBUG, line + sent, (uint32_t)len - sent);
+            tud_cdc_n_write_flush(CDC_IDX_DEBUG);
+            tud_task();
+            if (sent < (uint32_t)len) sleep_ms(1);
+        }
+#else
         tud_cdc_n_write(CDC_IDX_DEBUG, line, (uint32_t)len);
         tud_cdc_n_write_flush(CDC_IDX_DEBUG);
+#endif
     }
+#else
+    // The robot's sole USB port belongs exclusively to zenoh. Never mix
+    // boot logs or driver messages into its binary protocol.
+    (void)fmt;
+#endif
 }
 
 // A breath: brightness runs LED_MIN -> LED_MAX -> LED_MIN over the period,

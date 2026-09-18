@@ -1,9 +1,7 @@
 # udev rules for the RoboCore Axon ROS node board
 #
-# Creates stable /dev/axon-* symlinks for the three CDC ports:
-#   /dev/axon-zenoh  - zenoh serial transport (point zenohd here)
-#   /dev/axon-lidar  - lidar UART passthrough (point rplidar_ros here)
-#   /dev/axon-debug  - debug log (init info, discovered IDs, status)
+# The robot has one CDC port: /dev/axon-zenoh.
+# The standalone IMU diagnostic instead exposes /dev/axon-debug.
 #
 # Installation:
 #   sudo cp 99-axon-devices.rules /etc/udev/rules.d/
@@ -11,9 +9,6 @@
 
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="ac01", ATTRS{interface}=="RoboCore Axon Zenoh", \
     SYMLINK+="axon-zenoh", MODE="0666", GROUP="dialout"
-
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="ac01", ATTRS{interface}=="RoboCore Axon Lidar", \
-    SYMLINK+="axon-lidar", MODE="0666", GROUP="dialout"
 
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="ac01", ATTRS{interface}=="RoboCore Axon Debug", \
     SYMLINK+="axon-debug", MODE="0666", GROUP="dialout"

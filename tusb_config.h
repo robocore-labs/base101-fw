@@ -21,12 +21,17 @@
 // CLASS CONFIGURATION
 //--------------------------------------------------------------------
 
-// 3 CDC interfaces: zenoh transport + lidar passthrough + debug log
-#define CFG_TUD_CDC           3
+// One CDC port: zenoh transport, or standalone diagnostic output.
+#define CFG_TUD_CDC           1
 // zenoh serial frames are up to ~1.7 KB (MTU 1500 + framing + COBS);
 // generous FIFOs keep the byte-wise reader and bulk writer fast.
+#ifdef CALIBRATION_FIRMWARE
+#define CFG_TUD_CDC_RX_BUFSIZE 4096
+#define CFG_TUD_CDC_TX_BUFSIZE 4096
+#else
 #define CFG_TUD_CDC_RX_BUFSIZE 2048
 #define CFG_TUD_CDC_TX_BUFSIZE 2048
+#endif
 
 #define CFG_TUD_VENDOR        0
 #define CFG_TUD_HID           0

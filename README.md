@@ -1,123 +1,200 @@
 # base101 firmware
 
-Firmware for the **Link101 board (RP2350A)** that makes base101 a **ROS 2
-node in its own right**. Motor control runs on the board; the host talks to
-it over **zenoh** ([Pico-ROS](https://github.com/Pico-ROS/Pico-ROS-software)
-+ [zenoh-pico](https://github.com/eclipse-zenoh/zenoh-pico), compatible with
-[rmw_zenoh](https://github.com/ros2/rmw_zenoh)). There is no bridge process
-and no serial protocol for the host to speak — with `rmw_zenoh` running,
-this board is another node in the graph.
+Firmware for the Link101 board (RP2350A), running a ROS 2 node over USB
+zenoh through Pico-ROS and zenoh-pico. Robot configuration is in `robot.h`.
 
-```
-            ┌───────────────────────── Link101 (RP2350A) ─────────────────────┐
-            │                                                                  │
- USB CDC #0 │  zenoh ── ROS node "axon"                                        │
-◄──────────►│    sub  base_cmd  ──► 4x DDSM210, one PIO UART each              │──► wheels
-            │    sub  arm_cmd   ──► Feetech servos on the half-duplex bus      │──► arm
-            │    pub  joint_states, motor_telemetry/*                          │
-            │    pub  imu/data, imu/mag, imu/temperature ◄── onboard IMU (i2c1)│
- USB CDC #1 │                                                                  │
-◄──────────►│  passthrough ◄──────────────────────────────────► uart1          │──► RPLidar C1
- USB CDC #2 │                                                                  │
-◄──────────►│  boot log (goes quiet once zenoh is up)                          │
-            └──────────────────────────────────────────────────────────────────┘
-```
+## Current ROS interface
 
-## Where to start
-
-**[`robot.h`](robot.h) is the robot.** Pins, motor IDs, joint names,
-directions, rates, topic names, speed limits — all of it, in one file, with
-nothing else in the firmware carrying numbers like these. Retuning or
-rewiring means editing that file and reflashing.
-
-The rest is one file per thing, ~100 lines each, readable in any order:
-
-| File | What it is |
-|---|---|
-| [`main.c`](main.c) | `setup()` then `loop()`. The whole shape of the firmware. |
-| [`wheels.c`](wheels.c) | The four drive wheels: speed in, angle out. |
-| [`servos.c`](servos.c) | The arm: angle in, angle and telemetry out. |
-| [`imu.c`](imu.c) | The onboard LSM6DSOX + MMC5983MA. |
-| [`lidar.c`](lidar.c) | Bytes between USB CDC #1 and uart1. |
-| [`ros.c`](ros.c) | Publishers, subscribers, and what goes out when. |
-| [`status.c`](status.c) | The boot log, and what the LED strip is saying. |
-| [`io.c`](io.c) | USB, and the heartbeat every blocking wait runs. |
-
-Everything below that — the board, the drivers, zenoh, the ROS layer — is a
-library, in `lib/` as a submodule. See [Libraries](#libraries).
-
-## ROS interface
-
-| Direction | Topic | Type | Meaning |
+| Direction | Topic | Type | Behavior |
 |---|---|---|---|
-| sub | `/motor_manager/base_cmd` | `std_msgs/Float64MultiArray` | 4 wheel speeds, rad/s |
-| sub | `/motor_manager/arm_cmd` | `std_msgs/Float64MultiArray` | arm joint angles, rad |
-| pub | `/motor_manager/joint_states` | `sensor_msgs/JointState` | wheels + arm, 50 Hz |
-| pub | `/motor_telemetry/<joint>/current` | `std_msgs/Float32` | servo current, mA |
-| pub | `/motor_telemetry/<joint>/voltage` | `std_msgs/Float32` | servo voltage, V |
-| pub | `/motor_telemetry/<joint>/load` | `std_msgs/Float32` | servo load, % |
-| pub | `/motor_telemetry/<joint>/temperature` | `std_msgs/Int32` | servo temperature, °C |
-| pub | `/imu/data` | `sensor_msgs/Imu` | angular velocity + acceleration, 50 Hz |
-| pub | `/imu/mag` | `sensor_msgs/MagneticField` | magnetometer, tesla |
-| pub | `/imu/temperature` | `sensor_msgs/Temperature` | IMU die temperature, °C |
+| sub | `/cmd_vel` | `geometry_msgs/TwistStamped` | Body velocity: twist.linear.x in m/s, twist.angular.z in rad/s. |
+| pub | `/imu` | `sensor_msgs/Imu` | Acceleration and angular velocity, up to 50 Hz. |
+| pub | `/imu/mag` | `sensor_msgs/MagneticField` | Magnetic field in tesla. |
+| pub | `/imu/temperature` | `sensor_msgs/Temperature` | IMU die temperature in Celsius. |
+| pub | `/imu/status` | `std_msgs/String` | Sensor initialization, identity probes, sync and read/publish counters, 1 Hz. |
 
-Command arrays are in the order of the `WHEELS` and `SERVOS` tables in
-`robot.h`; reorder a table and both the command array and the joint_states
-slots follow. Wheel speeds are `rad/s × direction`, capped at
-`WHEEL_MAX_RPM`; arm angles are radians from centre. Repeating a command is
-free — an unchanged value is not re-sent to the bus.
+The `twist` body velocity in cmd_vel is allocated as `(linear.x - angular.z * separation / 2) / radius`
+for the left wheels and `(linear.x + angular.z * separation / 2) / radius`
+for the right wheels. Other velocity components and the header frame are ignored; commands must be
+expressed in the robot body frame. The watchdog uses local reception time,
+not header timestamps, so clock adjustments do not affect motion timeout. Radius is 0.0363 m
+and separation 0.2886 m, matching the hardware controller config. Excessive
+wheel targets are scaled together to preserve the requested turn ratio.
 
-Worth knowing:
+Body velocity is shaped in software before wheel allocation, at up to 50 Hz
+using actual monotonic elapsed time. Tested linear settings are 0.7 m/s²
+acceleration and 2 m/s³ jerk; angular limits are 3 rad/s² and 10 rad/s³ and
+still need ground testing. Hardware acceleration byte 1 lets the motor follow
+the shaped targets. Normal zero commands taper down through the same profile.
+Shaped wheel rates are uniformly saturated at the speed cap. A sudden target
+change may briefly retain previous acceleration while the jerk limit reduces
+it; explicit electric braking bypasses shaping. Non-finite/overflowing commands
+brake immediately. A profile timing gap over 100 ms during active motion also
+brakes and clears the profiles. Silence for
+500 ms triggers active braking, with brake frames repeated at 5 Hz while
+stale. Fresh commands resume from the braked state. The watchdog runs in the
+cooperative main loop, so blocking communications can delay its response.
 
-- **Wheel speed changes are ramped, not instant.** A `base_cmd` step --
-  reversing direction, or a turn asking the two sides for very different
-  speeds -- doesn't reach the motors as a jump. The actual commanded speed
-  moves toward whatever was last asked for at up to
-  `WHEEL_ACCEL_LIMIT_RAD_S2` (robot.h) rad/s², so the wheel can follow it
-  without skidding across the floor getting there. Lower that constant for
-  a gentler stop/turn, raise it to track the host more closely.
-- **A stale `base_cmd` brakes, hard, not ramped.** If nothing arrives for
-  `COMMAND_TIMEOUT_MS`, every wheel gets the DDSM210's active brake
-  immediately (not the gentle ramp above) — a host that stalls, crashes,
-  or drops the ROS link should not leave the robot coasting on the last
-  thing it heard.
-- **Stamps are time since boot.** The board has no RTC and nothing to sync
-  one against. Re-stamp on the host if it matters.
-- **Every joint appears every time.** A motor that doesn't answer reports
-  zero rather than dropping out, so the slots the host reads never shift.
-- **Missing hardware is not fatal.** Whatever doesn't answer at boot is
-  logged and skipped; its topics still exist and simply stay empty. No fake
-  data is ever published.
-- **`/imu/data` carries no orientation.** The onboard IMU is a raw 6-axis
-  sensor with no fusion engine, so the message sets
-  `orientation_covariance[0] = -1` — the `sensor_msgs/Imu` way of saying the
-  quaternion is meaningless — and leaves the quaternion zeroed. Run
-  `imu_filter_madgwick` or `robot_localization` on the host against
-  `/imu/data` + `/imu/mag` if you need attitude. (The previous firmware
-  published a fused quaternion because it used a BNO055 on the Qwiic
-  connector, which does fusion on-chip.)
-- `linear_acceleration` includes gravity, per the `sensor_msgs/Imu`
-  convention. Covariances are the fixed nominal diagonals in `robot.h` —
-  neither chip reports per-axis variance.
+Glide now shapes body commands once, then closes yaw rate using the gyro.
+The existing tested acceleration/jerk limits are retained. Effective-track
+feedforward starts at `GLIDE_ICR_COEFF 1.5`, estimated from the wood-floor turn;
+PI feedback is currently disabled (`GLIDE_YAW_FEEDBACK_ENABLED false`) for a
+floor comparison after continuous jerk was observed with feedback enabled.
+Calibration, gyro publication, feedforward and the operator ramps remain active.
+When re-enabled, PI correction passes through its own acceleration/jerk limits
+before wheel allocation, including a smooth return to zero in COAST mode. Gains, correction
+cap, deadband and low-pass frequency are in `robot.h`. Uniform wheel saturation
+preserves curvature, and the integrator freezes at saturation or after 200 ms
+of excessive motor tracking error (it can still unwind). Once a zero command
+has settled, COAST disables correction so the robot does not fight being pushed.
+Watchdog braking clears glide state and preserves the calibrated gyro bias.
+Stale gyro over 50 ms, failed motor replies or missing/faulted wheel feedback
+actively brake all wheels; subsequent motion needs a fresh command and inputs.
+Yaw control runs at the existing 50 Hz motor tick; IMU sampling requests 208 Hz
+on the cooperative main loop. This implementation has no FIFO or second core.
+
+On each ROS firmware startup, wheels remain actively braked while a continuous
+15-second stationary window estimates body-Z gyro bias. The window begins with
+the first valid stationary samples after ROS connects; USB and ROS remain live.
+Commands received before calibration completes are ignored, never queued.
+Keep the entire robot still. All four wheel replies must be fresh and near zero,
+gravity magnitude plausible, and gyro axes quiet. Movement, failed reads or
+sample gaps restart the window. The window needs at least 750 samples, yaw
+standard deviation <=0.003 rad/s and absolute bias <=0.05 rad/s. Rejected windows
+retry while motion remains blocked. Bias is held in RAM and remeasured each boot.
+No heading or absolute yaw is calibrated. Gyro sign +1 was verified using a
+positive-turn pulse before enabling the feedback loop.
+
+`/imu/status` reports `yaw_cal=keep_still` or `ready`, `cal_s`, `cal_samples`,
+`cal_rejected`, `bias`, `gyro_fresh`, `yaw_rate`, `yaw_corr` and `saturated`.
+LEDs stay yellow until calibration is ready and gyro data is fresh, then green.
+`/imu` and temperature publication wait for calibration; mag publication remains
+independent. `/imu` Z angular velocity is the same corrected/filtered yaw rate
+used by glide; other gyro axes remain raw. To recalibrate without rebooting:
+
+```bash
+ros2 topic pub --once /axon/gyro_calibrate std_msgs/msg/Bool '{data: true}'
+```
+
+This brakes all wheels and starts a new stationary window without resetting pose.
+
+Odometry publishes `/odom` (`nav_msgs/msg/Odometry`) at 50 Hz, with `odom`
+as the parent and `base_link` as the child. Linear velocity is the mean of all
+four measured wheel speeds, corrected for motor polarity and wheel radius;
+yaw is `(right_mean - left_mean) / wheel_separation`. Both velocities use
+encoder feedback only; commands and IMU data never enter the odometry estimate.
+Motor polarity is +1 on the left and -1 on the right, corrected after the
+observed physical forward/back reversal. Commands and encoder feedback use
+the same polarity; `ODOM_ENCODER_SIGN` is +1 (no additional sign inversion). Wheel-derived yaw on this skid steer
+is sensitive to floor slip and effective track width. Midpoint heading and trapezoidal velocities integrate
+x/y/yaw using monotonic elapsed time. All four healthy motor replies must be
+less than 100 ms old. Missing inputs or integration gaps over 50 ms break the
+interval; recovery does not extrapolate across missing data. Pose holds during
+these gaps and `/odom`/TF publishing pauses while inputs are invalid or stale.
+
+`/tf` broadcasts the matching `odom -> base_link` pose and stamp at 50 Hz.
+`PUBLISH_ODOM_TF` in `robot.h` defaults true; disable it if a host EKF owns that
+transform. `/odom/reset` (`std_msgs/msg/Bool`, `data: true`) resets only pose,
+without releasing brakes, changing commands or altering gyro calibration.
+Only the yaw controller and `/imu` use the signed, calibrated gyro; odometry
+remains independent of gyro bias and control correction. Encoder odometry
+does not require a working IMU. Pose yaw covariance
+is 0.1 and twist yaw-rate covariance is 0.05 to reflect wheel slip; remaining
+nominal covariances follow step D in `specs.md`.
+All stamped publications require fresh host clock synchronization; sampling and
+integration continue without it.
+
+Wheel drive responses supply feedback without additional queries during motion.
+While braked, 50 Hz brake frames return measured speeds without releasing the
+brake. The command watchdog still checks each loop and repeats active brakes at
+5 Hz. Wheels are initialized and actively braked at startup. The old wheel-array commands, arm commands,
+joint states and motor telemetry are excluded from the active ROS interface.
+
+Arm support is preserved in `attic/arm/`, including servo sources and snapshots
+of the previous ROS interface and robot configuration. `pico_feetech` remains
+on disk as a submodule but is neither built nor linked.
+
+The accelerometer and gyroscope sample internally at 208 Hz. Firmware requests
+the latest register sample independently at 208 Hz; ROS
+publishing remains at 50 Hz and uses the cached sample with its acquisition
+stamp. The cooperative loop and blocking motor transactions can lower the
+actual sampling rate. There is no FIFO: intermediate samples are not buffered
+or averaged. The magnetometer remains at 100 Hz.
+
+IMU timestamps use synchronized host system time (see Clock synchronization below).
+`/imu` has no orientation estimate
+(`orientation_covariance[0] = -1`); acceleration includes gravity. Sensor
+initialization failures are logged, and missing sensors publish no readings.
+
+USB exposes one CDC port. In normal firmware it carries only zenoh; text logs
+are disabled and LEDs show status. The standalone `imu_diagnostic` instead
+uses its single port for continuous sensor readings. The previous lidar USB
+passthrough is preserved in `attic/lidar/` and is not built or initialized.
+
+To diagnose missing IMU data, run `ros2 topic echo /imu/status`.
+This status topic does not require clock synchronization. WHO_AM_I `0x6C`
+is expected at 0x6B or 0x6A; identity probes refresh after each initialization attempt.
+`lsm6dsox=offline` means initialization failed. An online sensor with increasing
+`reads_failed` has sampling transaction failures. `reads_ok` increasing means
+sampling succeeds; `imu_publish_failed` then distinguishes publication errors.
+An offline LSM6DSOX retries configuration once per second, without bus clearing
+or software sensor resets. Status includes init_attempts.
+
+## Clock synchronization
+
+Run `tools/time_sync_host.py` alongside the real robot ROS stack, with the same
+ROS domain and RMW configuration. It uses host system time; this is not a
+simulation `/clock` bridge. Ensure the host itself has the desired time source
+(e.g. NTP). For the drive container, after starting it:
+
+```bash
+docker cp tools/time_sync_host.py base101-drive-1:/tmp/axon_time_sync.py
+docker exec -it base101-drive-1 bash -lc 'source /opt/ros/jazzy/setup.bash; python3 /tmp/axon_time_sync.py'
+```
+
+For regular use, launch this helper with the robot stack. Only one time-server
+instance should serve a board. It adds these topics:
+
+| Direction at firmware | Topic | Type | Payload |
+|---|---|---|---|
+| pub | `/axon/time_sync/request` | `std_msgs/UInt64` | Board transmit time, monotonic microseconds. |
+| sub | `/axon/time_sync/response` | `std_msgs/Int64MultiArray` | `[echoed_board_us, host_receive_ns, host_send_ns]`, empty layout. |
+
+The board probes once per second, subtracts host processing time from the
+round trip, and assumes symmetric transport to estimate the clock offset.
+Unmatched, duplicate, invalid, or round-trip-over-20-ms responses are rejected.
+Actual accuracy depends on path asymmetry and scheduling; it is not yet
+measured on the robot. The host's ROS signed-second range is enforced.
+
+IMU, magnetic-field and temperature messages pause until first synchronization
+and if no acceptable sample arrives for 10 seconds. They resume automatically
+on synchronization. The standalone IMU diagnostic remains independent of this
+helper. Drive commands and the stale-command brake continue using monotonic
+reception time, even while unsynchronized or if host wall time changes.
+Stamped command headers are not used to determine command freshness yet.
+
+Run the portable clock tests without the Pico SDK:
+
+```bash
+cc -std=c11 -Wall -Wextra -Werror -fsanitize=undefined -I. time_sync.c tests/time_sync_test.c -o /tmp/base101-time-sync-test
+/tmp/base101-time-sync-test
+```
 
 ## Hardware
 
 | Bus | Pins | Notes |
 |---|---|---|
-| Servo bus | TX 7, RX 8, TXEN 16 | Feetech STS/SCS, half duplex, 1 Mbaud. Board-fixed. |
-| Wheels | GP19–26 | Four PIO UARTs, 115200. One motor per port — a DDSM210 can't share a TX line. |
+| Wheels | GP21–28 | Four PIO UARTs, 115200. One motor per port — a DDSM210 can't share a TX line. |
 | Lidar | TX 4, RX 5 | hardware `uart1`, 460800 (RPLidar C1) |
 | IMU | SDA 14, SCL 15 | `i2c1`: LSM6DSOX at 0x6B, MMC5983MA at 0x30. Both soldered to the board; the Qwiic connector is the same bus. |
 | LED strip | GP18 | six WS2812 pixels |
 
-PIO state machines are claimed at init, not assigned by hand: 2 for the
-servo bus, 8 for the wheels, 1 for the LEDs — 11 of the 12 the RP2350 has.
-If a port can't get one, `begin()` says so in the boot log instead of
-failing strangely later.
+PIO state machines are claimed at initialization: eight for wheel UARTs and
+one for the LEDs. The archived servo bus is not initialized.
 
-USB (VID:PID `1209:AC01`) presents three CDC ports: `RoboCore Axon Zenoh`,
-`RoboCore Axon Lidar`, `RoboCore Axon Debug`. The udev rules below turn
-those into stable names.
+USB (VID:PID `1209:AC01`) presents one port: `RoboCore Axon Zenoh` in normal
+firmware, or `RoboCore Axon Debug` in the diagnostic image. The udev rules
+below provide the corresponding stable name.
 
 ## Building
 
@@ -133,22 +210,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release && make -C build -j$(nproc)
 Flash by holding BOOT while plugging in and copying `build/base101_firmware.uf2`
 to the `RPI-RP2` drive, or `picotool load -f build/base101_firmware.uf2`.
 
-The boot log is on USB CDC #2 (`screen /dev/axon-debug 115200`) and tells you
-what answered:
-
-```
-=== base101 firmware ===
-[boot ] USB up: CDC0 zenoh, CDC1 lidar, CDC2 this log
-[lidar] uart1 on GP4/5 at 460800 baud
-[wheel] front_left_wheel_joint on GP21/22: online
-...
-[ros  ] connecting to the router on 'serial/cdc#baudrate=921600'...
-[ros  ] session up; declaring 'axon'
-[boot ] up. Going quiet -- watch the LED, or the ROS graph.
-```
-
-It stops there on purpose: in steady state every byte of USB bandwidth
-belongs to the zenoh transport. **The LED takes over from there:**
+Normal firmware has no USB boot log; its only port belongs to zenoh.
+The LED strip shows startup and loop status:
 
 | Strip | Means |
 |---|---|
@@ -160,6 +223,34 @@ It is driven from the main loop and from inside every blocking wait, so it
 keeps moving even while the board waits for a router that isn't up yet.
 Colours and rates are in `robot.h`.
 
+## Standalone IMU diagnostic
+
+Build a firmware image that prints onboard sensor data without a ROS router:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target imu_diagnostic -j4
+```
+
+Hold BOOT while plugging in, then copy `build/imu_diagnostic.uf2` to the
+`RPI-RP2` drive. This replaces the normal firmware; flash
+`base101_firmware.uf2` again to restore robot operation.
+
+Read the diagnostic's sole USB port with `screen /dev/axon-debug 115200`
+(or its `/dev/ttyACM*` device if udev rules are absent). This image replaces
+the zenoh interface with diagnostic text; normal firmware has no debug port.
+Motors and ROS are never initialized. Detection status repeats every second;
+acceleration, gyroscope, temperature and magnetometer readings print at 10 Hz.
+Offline sensors and failed reads are reported explicitly. Reboot to retry
+initialization. The production IMU helper returns 0 C if the separate
+temperature read fails.
+
+At rest, acceleration magnitude should be about 9.81 m/s² and gyro readings
+near zero. Tilt the board to move gravity between acceleration axes; rotate
+it to change gyro readings. Magnetic readings are in microtesla and may be
+strongly affected by nearby motors or magnets. Capture the boot log for
+address/WHO_AM_I diagnostics if the accelerometer/gyro stays offline.
+
 ## Host setup
 
 ### 1. udev rules
@@ -168,11 +259,12 @@ Colours and rates are in `robot.h`.
 ./install.sh
 ```
 
-gives you stable symlinks:
+gives the single port a stable symlink:
 
-- `/dev/axon-zenoh` — zenoh serial transport
-- `/dev/axon-lidar` — lidar passthrough
-- `/dev/axon-debug` — boot log
+- Normal firmware: `/dev/axon-zenoh` for zenoh.
+- Diagnostic firmware: `/dev/axon-debug` for sensor readings.
+
+Re-run the installer after updating the rules and reconnect the board.
 
 ### 2. zenoh router with serial transport
 
@@ -215,18 +307,10 @@ Then, with `RMW_IMPLEMENTATION=rmw_zenoh_cpp`:
 
 ```bash
 ros2 topic list
-ros2 topic echo /motor_manager/joint_states
-# all four wheels at 1 rad/s: [front_left, front_right, back_left, back_right]
-ros2 topic pub -r 20 /motor_manager/base_cmd std_msgs/msg/Float64MultiArray '{data: [1.0, 1.0, 1.0, 1.0]}'
-# arm to home
-ros2 topic pub --once /motor_manager/arm_cmd std_msgs/msg/Float64MultiArray '{data: [0, 0, 0, 0, 0, 0]}'
+ros2 topic echo /imu
+# Continuous low-speed command; replace linear.x with 0.0 to test a ramped stop.
+ros2 topic pub -r 20 /cmd_vel geometry_msgs/msg/TwistStamped '{header: auto, twist: {linear: {x: 0.1}, angular: {z: 0.0}}}'
 ```
-
-### 4. Lidar
-
-Point `rplidar_ros` at `/dev/axon-lidar` at 460800. The firmware copies bytes
-both ways and follows a baud rate change made on the port, so the driver
-behaves as if the lidar were plugged into the host.
 
 ## Libraries
 
@@ -238,7 +322,7 @@ Everything below the robot is a library, pulled in as a submodule under
 | [`pico_serial`](https://github.com/robocore-labs/pico_serial) | The `serial_t` interface every driver speaks, and `serial_hook.h`. |
 | [`pico_cdc_serial`](https://github.com/robocore-labs/pico_cdc_serial) | A USB CDC interface as a `serial_t`. The one place USB stops. |
 | [`hardware_link101`](https://github.com/robocore-labs/hardware_link101) | The board: PIO and UART ports, pin map, LED strip, CAN, and the onboard LSM6DSOX + MMC5983MA. |
-| [`pico_feetech`](https://github.com/robocore-labs/pico_feetech) | Feetech STS/SCS servos. |
+| [`pico_feetech`](https://github.com/robocore-labs/pico_feetech) | Archived arm dependency; not built or linked. |
 | [`pico_ddsm`](https://github.com/robocore-labs/pico_ddsm) | DDSM210 wheel motors. |
 | [`pico_zenoh`](https://github.com/robocore-labs/pico_zenoh) | zenoh-pico for bare metal, over any `serial_t`. |
 | [`easypicoros`](https://github.com/robocore-labs/easyp) | Typed ROS publishers and subscribers on top of Pico-ROS. |
@@ -251,32 +335,111 @@ subscriber facade is impossible — easypicoros' build checks for it).
 ### How the pieces fit
 
 Every bus in the firmware is a `serial_t`, and the drivers take one. So a
-wheel motor, a servo, the lidar and the zenoh link are all the same kind of
+wheel motor and the zenoh link are all the same kind of
 thing, and nothing below the application knows what USB is.
 
 The interesting part is **`io_poll()`**. Drivers block waiting for a reply and
 call `serial_task()` while they wait, so every bus is wrapped with
-`serial_hook_init()` to run `io_poll()` there: USB, the lidar bridge and the
-LED keep going *inside* a servo read, a wheel read, or zenoh waiting for a
+`serial_hook_init()` to run `io_poll()` there: USB and the
+LED keep going *inside* a wheel transaction or zenoh waiting for a
 router that isn't up yet. One hook, everywhere, with one rule — `io_poll()`
 must never touch a wrapped bus or call into zenoh, or it would be calling
 itself.
 
-## What changed, and why
+### Standalone motor terminal
 
-This firmware used to carry its own copies of everything: two near-identical
-PIO UART implementations, the motor drivers, the IMU driver, the zenoh port,
-its own ROS message catalogue. All of it now lives in the libraries above,
-shared with the other Link101 firmwares — around 950 lines that were here are
-gone, and the drivers gained things the old copies never had (SYNC reads for
-whole-chain servo transactions, multiple IMUs per bus).
+Build with `picobuild`, then flash **explicitly** with
+`picoflash build/motor_terminal.uf2`. The single USB CDC identifies as
+`Axon Motor Terminal` / `RoboCore Axon Debug`; ROS is not linked into this target.
+Connect with `python3 tools/motor_terminal.py /dev/ttyACM0` (use the actual port).
+`help` prints the command list; `quit` or Ctrl-C in this client sends electric brake.
 
-**Config mode is gone.** The board used to boot into a JSON console on the
-debug port — held the button at boot, edited the servo list, saved it to
-flash. It was worth having while bringing the hardware up, and nothing used
-it afterwards. The servo list is compiled in (`SERVOS` in `robot.h`), and
-with it went the flash persistence, the console, the bench-test commands, the
-config web page and the button check at boot.
+Commands: `hw 100` sets the motor ramp to 10 ms/RPM; larger values are gentler.
+`sw 6` sets the software ramp in rad/s²; `sw 0` isolates the motor's own ramp.
+`wheel all` or `wheel 0` selects all wheels or FL=0, FR=1, BL=2, BR=3 at rest.
+`run 10 10 2` requests physical left/right RPM for two seconds, then ramps to zero.
+A new `run` during a run can test reversal. Experiments are bounded to ten seconds
+and ±200 RPM. `stop` ramps to zero; `brake` or `!` applies electric braking.
+The v2 terminal defaults to `mode shape`, hardware acceleration byte 1,
+and body limits `shape 0.7 2 3 10`: linear acceleration 0.7 m/s², linear jerk
+2 m/s³, yaw acceleration 3 rad/s² and yaw jerk 10 rad/s³. These are tuning
+candidates, not validated driving settings. Shaping uses a velocity tracker
+with bounded acceleration and jerk, tapering acceleration near the target.
+Sudden target changes can briefly continue the previous acceleration while
+jerk limiting brings it down; this is not an emergency-stop trajectory.
+`run` still takes left/right RPM and converts them into body velocity before
+shaping. All four motors must be online for body-space experiments.
 
-The old firmware is kept at
-`../attic/firmware-before-link101-libs/` if you need to look something up.
+Use `mode hw` to bypass all software shaping, `mode linear` for the old
+per-wheel ramp, and `mode shape` for body-space jerk limiting. `sw 0` selects
+hardware-only mode; `sw 6` selects the old ramp. Change modes, hardware ramp
+and shaping limits only at rest. The shaped mode reports body velocity,
+acceleration, yaw rate, yaw acceleration and actual update interval.
+The shaper uses actual elapsed time; a control gap over 100 ms brakes and
+latches a fault. Acceleration and jerk are independently tunable with
+`shape AX JX AW JW` (limits: AX 0.01–5, JX 0.01–50, AW 0.01–20,
+JW 0.01–200, all SI units).
+Feedback reports target, command and measured physical RPM, echoed acceleration,
+temperature and error flags at 5 Hz. Missing replies or motor errors brake all
+online motors and latch a fault until reboot. USB removal brakes immediately.
+No movement experiment runs automatically at startup.
+
+### Detailed IMU diagnostic
+
+`imu_diagnostic` v8 waits for the CONFIG button (GP17, active low, 30ms
+debounce) before initializing or accessing I2C. Open its sole debug serial
+port first, then press the button to capture the entire trace. A held button
+at boot must be released and pressed again. The waiting message repeats
+once per second, with the build identifier.
+
+The diagnostic defaults to I2C1 at **100 kHz**. The magnetometer is completely
+excluded from initialization and sampling, including identity probes. Motor
+and ROS initialization are also excluded. This isolation is diagnostic-only;
+the ROS firmware still publishes its magnetometer readings.
+
+Initialization performs ordinary I2C controller/pin setup, identity reads and
+sampling configuration, with every LSM6DSOX register transaction logged.
+No GPIO clock pulses, manually generated STOP, controller deinitialization,
+software sensor reset or reset polling is performed.
+Transaction logs include direction, address, register, requested size, return
+count, elapsed microseconds and read value. Negative counts are SDK errors.
+The driver is the same production source compiled with diagnostic tracing;
+verbose transactions are enabled only during initialization, including retries.
+Serial output drains with a bounded wait instead of dropping full-FIFO writes.
+
+After initialization, live WHO_AM_I probes and health counters repeat at
+1 Hz, and IMU/temperature readings print at 10 Hz. Commands: `probe`, `regs`
+(CTRL1_XL, CTRL2_G, CTRL3_C at both addresses; expected 0x58, 0x54, 0x44),
+`scan` (one-byte reads over nonreserved addresses, skipping magnetometer 0x30),
+and `retry` (ordinary I2C initialization and LSM6DSOX configuration; resets counters).
+`rate 100000` or `rate 400000` reinitializes at the selected rate; all
+subsequent probes, scans and automatic configuration retries preserve that rate. Flash explicitly:
+`picoflash build/imu_diagnostic.uf2`.
+
+`samples` compares registers 0x22–0x2D as twelve independent one-byte reads,
+2/6/12-byte bursts with the former 1ms timeout, and a 12-byte burst with a
+5ms timeout. It also checks temperature separately. Results include both I2C
+phase return counts, elapsed time and received bytes; individual transactions
+are not a coherent IMU sample. This comparison runs automatically after the
+first online sample failure per initialization attempt. Failed production-driver
+sample transactions are also traced with address/register context. At 100kHz,
+a 12-byte read needs over 1ms on the wire. Hardware traces confirmed the 1ms
+budget failed and the 5ms budget succeeded, so the shared LSM6DSOX driver now
+uses a bounded 5ms timeout. No resets are added.
+
+## Calibration UI
+
+The separate `calibration_firmware` target and Python3 server provide a browser
+UI with stationary gyro calibration, hold-to-drive controls, independent
+operator/server watchdogs, live telemetry, 19 tuning sliders, bounded wheel/spin/
+braking/reference trials, MCU transient measurements, repeated-run candidates,
+and persistent results. Yaw PI starts disabled for the quiet baseline. See
+[tools/calibration/README.md](tools/calibration/README.md) for the explicit UF2,
+server command, controls, and API. The guided calibration plan is in
+[CALIBRATION_UI_PLAN.md](CALIBRATION_UI_PLAN.md).
+
+
+The calibration UI can run each step's subtests automatically. At the end,
+**Save calibration.h** exports all accepted settings as a build input for the ROS
+firmware. Rebuild base101_firmware and flash build/base101_firmware.uf2 to keep
+those settings across reboots.

@@ -18,7 +18,7 @@ tusb_desc_device_t const desc_device = {
 
     .idVendor           = 0x1209,
     .idProduct          = 0xAC01,
-    .bcdDevice          = 0x0300,
+    .bcdDevice          = 0x0400,
 
     .iManufacturer      = STR_IDX_MANUF,
     .iProduct           = STR_IDX_PRODUCT,
@@ -34,22 +34,15 @@ uint8_t const *tud_descriptor_device_cb(void) {
 //--------------------------------------------------------------------
 // Configuration Descriptor
 //--------------------------------------------------------------------
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN * 3)
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN)
 
 uint8_t const desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 500),
 
-    // CDC #0: zenoh serial transport
+    // CDC #0: zenoh transport, or diagnostic text in imu_diagnostic
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC0_COMM, STR_IDX_CDC0,
                        EP_CDC0_NOTIF, 8, EP_CDC0_OUT, EP_CDC0_IN, 64),
 
-    // CDC #1: UART1 passthrough (Lidar)
-    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC1_COMM, STR_IDX_CDC1,
-                       EP_CDC1_NOTIF, 8, EP_CDC1_OUT, EP_CDC1_IN, 64),
-
-    // CDC #2: debug log
-    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC2_COMM, STR_IDX_CDC2,
-                       EP_CDC2_NOTIF, 8, EP_CDC2_OUT, EP_CDC2_IN, 64),
 };
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
@@ -63,11 +56,19 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
 static char const *string_desc_arr[] = {
     [STR_IDX_LANG]    = (const char[]){0x09, 0x04},
     [STR_IDX_MANUF]   = "RoboCore",
+#ifdef MOTOR_TERMINAL
+    [STR_IDX_PRODUCT] = "Axon Motor Terminal",
+#elif defined(IMU_DIAGNOSTIC)
+    [STR_IDX_PRODUCT] = "Axon IMU Diagnostic",
+#else
     [STR_IDX_PRODUCT] = "Axon ROS Node",
+#endif
     [STR_IDX_SERIAL]  = NULL,
+#if defined(IMU_DIAGNOSTIC) || defined(MOTOR_TERMINAL)
+    [STR_IDX_CDC0]    = "RoboCore Axon Debug",
+#else
     [STR_IDX_CDC0]    = "RoboCore Axon Zenoh",
-    [STR_IDX_CDC1]    = "RoboCore Axon Lidar",
-    [STR_IDX_CDC2]    = "RoboCore Axon Debug",
+#endif
 };
 
 static uint16_t _desc_str[33];

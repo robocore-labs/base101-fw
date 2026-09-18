@@ -9,13 +9,9 @@
  * Wheels that don't answer at boot are remembered as offline and skipped,
  * so a disconnected motor costs one probe at startup and nothing after.
  *
- * wheels_set_speed() sets what a wheel should be doing, not what it does
- * this instant: wheels_update() ramps the real commanded speed toward that
- * target a little at a time (WHEEL_ACCEL_LIMIT_RAD_S2 in robot.h), so a
- * base_cmd that steps -- reversing direction, or a turn asking for very
- * different left/right speeds -- doesn't skid the wheel across the floor
- * chasing an instant jump. Call wheels_update() every time round the main
- * loop; it decides on its own how often that's actually worth acting on.
+ * Glide shapes body targets once, closes gyro yaw and allocates wheels at
+ * 50 Hz. Startup requires a 15-second stationary bias calibration.
+ * The motor ramp is set fast to follow software-shaped commands.
  */
 
 #ifndef WHEELS_H
@@ -23,6 +19,19 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "imu.h"
+
+typedef struct {
+    bool calibrated, fresh, saturated;
+    unsigned samples, rejected_windows;
+    double bias, yaw_rate, correction;
+    uint64_t elapsed_us;
+} wheels_yaw_status_t;
+// Starts a new stationary bias window and brakes all wheels. No pose reset.
+void wheels_restart_gyro_calibration(void);
+void wheels_observe_gyro(const imu_sample_t *sample, uint64_t now_us, bool valid);
+bool wheels_yaw_rate(uint64_t now_us, double *rate);
+void wheels_get_yaw_status(uint64_t now_us, wheels_yaw_status_t *out);
 
 // Open a port per wheel, find out who is there, and put them in velocity
 // mode. Returns how many answered.
@@ -30,28 +39,45 @@ uint8_t wheels_begin(void);
 
 bool wheels_online(uint8_t index);
 
-// Set the target speed for one wheel, in rad/s at the wheel. Direction and
-// the speed cap from robot.h are applied when it's actually sent, not
-// here -- this only records what wheels_update() should be steering
-// toward.
-void wheels_set_speed(uint8_t index, double rad_per_sec);
+// Record body velocity (linear.x and angular.z) for software shaping.
+// Scales excessive wheel rates together. False for non-finite or overflowing
+// inputs, leaving targets unchanged; the caller must brake on rejection.
+bool wheels_set_velocity(double linear_m_s, double angular_rad_s);
 
-// Advance the ramp for every wheel toward its target and send whichever
-// ones moved. Call every time round the main loop -- it rate-limits
-// itself to WHEEL_CONTROL_HZ, so calling it more often than that costs
-// nothing.
+// Advance body profiles using monotonic dt, allocate and send wheel setpoints.
+// A timing gap over 100 ms during active motion brakes and resets profiles.
 void wheels_update(void);
 
-// Stop one wheel right now: sets both its target and its ramped speed to
-// zero and sends the DDSM210's brake command immediately, skipping the
-// ramp entirely. This is the safety path, not the comfortable one --
-// used when a wheel must stop with no further argument, not when it
-// should ease down to a stop (that's just wheels_set_speed(index, 0),
-// same as any other target).
+// Stop immediately using electric brake and latch until a fresh speed command.
+// Clears body profiles; normal zero commands use software shaping.
 void wheels_brake(uint8_t index);
+
+// Encoder-only body velocity from left/right mean measured wheel speeds. Requires all four healthy replies
+// within the freshness window; never substitutes command targets.
+bool wheels_measured_twist(uint64_t now_us, double *linear_m_s, double *angular_rad_s);
 
 // Where the wheel is now, in radians, counting full turns since boot.
 // Returns 0 for a wheel that is offline or didn't answer this time.
 double wheels_read_angle(uint8_t index);
+
+// Shared diagnostics and runtime tuning for the standalone calibrator.
+typedef struct {
+    bool motion_enabled, at_rest;
+    unsigned brake_ok_mask;
+    double requested_vx, requested_wz, shaped_vx, shaped_wz;
+    double commanded_rpm[4], measured_rpm[4];
+    bool online[4], fresh[4];
+    uint64_t sample_us[4];
+    uint8_t error[4], temperature[4];
+} wheels_drive_status_t;
+void wheels_get_drive_status(uint64_t now_us, wheels_drive_status_t *out);
+bool wheels_configure_motion(double ax, double jx, double aw, double jw, double icr);
+#include "calibration_protocol.h"
+bool wheels_configure_calibration(const calibration_parameters_t *parameters);
+void wheels_get_parameters(calibration_parameters_t *parameters);
+#ifdef CALIBRATION_FIRMWARE
+// Retry boot-offline motors on existing ports, only with motion disabled.
+void wheels_retry_offline(void);
+#endif
 
 #endif // WHEELS_H

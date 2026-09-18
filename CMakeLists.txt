@@ -48,7 +48,7 @@ pico_sdk_init()
 #   pico_cdc_serial   a USB CDC interface as one of those
 #   hardware_link101  the board: PIO/UART ports, pins, the LED strip, the
 #                     onboard LSM6DSOX + MMC5983MA IMU
-#   pico_feetech      Feetech STS servos
+#   pico_feetech is archived in attic/arm and is not built or linked.
 #   pico_ddsm         DDSM210 wheel motors
 #   pico_zenoh        zenoh-pico for bare metal, over any serial_t
 #   easypicoros       ROS 2 publishers and subscribers on top of that
@@ -70,7 +70,6 @@ add_subdirectory(${LINK101_LIBS}/pico_serial      pico_serial)
 add_subdirectory(${LINK101_LIBS}/pico_cdc_serial  pico_cdc_serial)
 add_subdirectory(${LINK101_LIBS}/pico_zenoh       pico_zenoh)
 add_subdirectory(${LINK101_LIBS}/hardware_link101 hardware_link101)
-add_subdirectory(${LINK101_LIBS}/pico_feetech     pico_feetech)
 add_subdirectory(${LINK101_LIBS}/pico_ddsm        pico_ddsm)
 add_subdirectory(${LINK101_LIBS}/easypicoros      easypicoros)
 
@@ -80,24 +79,28 @@ add_subdirectory(${LINK101_LIBS}/easypicoros      easypicoros)
 add_executable(base101_firmware
     main.c
     io.c
-    lidar.c
     wheels.c
-    servos.c
+    motion_profile.c
     imu.c
     ros.c
+    time_sync.c
+    odometry.c
+    gyro_yaw.c
+    glide.c
     status.c
     usb_descriptors.c
 )
 
 pico_set_program_name(base101_firmware "base101")
-pico_set_program_version(base101_firmware "4.0")
+pico_set_program_version(base101_firmware "4.1")
 
-# The firmware drives USB itself (three CDC ports, custom descriptors), so
+# The firmware drives its single USB CDC port with custom descriptors, so
 # the SDK's stdio must stay off both transports and out of the way.
 pico_enable_stdio_uart(base101_firmware 0)
 pico_enable_stdio_usb(base101_firmware 0)
 
 target_include_directories(base101_firmware PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+target_compile_definitions(base101_firmware PRIVATE BASE101_USE_CALIBRATION_HEADER=1)
 
 target_link_libraries(base101_firmware
     pico_stdlib
@@ -107,7 +110,6 @@ target_link_libraries(base101_firmware
     tinyusb_board
     hardware_link101
     pico_cdc_serial
-    pico_feetech
     pico_ddsm
     easypicoros
 )
@@ -115,3 +117,48 @@ target_link_libraries(base101_firmware
 target_compile_options(base101_firmware PRIVATE -Wall -Wextra)
 
 pico_add_extra_outputs(base101_firmware)
+
+# Standalone sensor bring-up with one USB debug port instead of zenoh.
+add_executable(imu_diagnostic
+    imu_diagnostic.c imu.c io.c status.c usb_descriptors.c
+    imu_diagnostic_trace.c imu_diagnostic_lsm6dsox.c
+)
+pico_set_program_name(imu_diagnostic "base101-imu-diagnostic")
+target_compile_definitions(imu_diagnostic PRIVATE IMU_DIAGNOSTIC=1 IMU_DIAGNOSTIC_NO_MAG=1 IMU_I2C_BAUD=100000)
+pico_enable_stdio_uart(imu_diagnostic 0)
+pico_enable_stdio_usb(imu_diagnostic 0)
+target_include_directories(imu_diagnostic PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(imu_diagnostic
+    pico_stdlib pico_unique_id hardware_i2c tinyusb_device tinyusb_board
+    hardware_link101 pico_cdc_serial
+)
+target_compile_options(imu_diagnostic PRIVATE -Wall -Wextra)
+pico_add_extra_outputs(imu_diagnostic)
+
+# Interactive motor tuning, independent of ROS and sensor sampling.
+add_executable(motor_terminal motor_terminal.c motion_profile.c io.c status.c usb_descriptors.c)
+pico_set_program_name(motor_terminal "base101-motor-terminal")
+target_compile_definitions(motor_terminal PRIVATE MOTOR_TERMINAL=1)
+pico_enable_stdio_uart(motor_terminal 0)
+pico_enable_stdio_usb(motor_terminal 0)
+target_include_directories(motor_terminal PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(motor_terminal pico_stdlib pico_unique_id tinyusb_device
+    tinyusb_board hardware_link101 pico_cdc_serial pico_ddsm)
+target_compile_options(motor_terminal PRIVATE -Wall -Wextra)
+pico_add_extra_outputs(motor_terminal)
+
+# Standalone manual calibration with shared motion and sensor modules.
+add_executable(calibration_firmware calibration_firmware.c calibration_protocol.c
+    calibration_metrics.c
+    wheels.c imu.c gyro_yaw.c glide.c motion_profile.c odometry.c
+    io.c status.c usb_descriptors.c)
+target_compile_definitions(calibration_firmware PRIVATE CALIBRATION_FIRMWARE=1 IMU_DIAGNOSTIC_NO_MAG=1)
+pico_set_program_name(calibration_firmware "base101-calibration")
+pico_set_program_version(calibration_firmware "2.2")
+pico_enable_stdio_uart(calibration_firmware 0)
+pico_enable_stdio_usb(calibration_firmware 0)
+target_include_directories(calibration_firmware PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(calibration_firmware pico_stdlib pico_unique_id tinyusb_device
+    tinyusb_board hardware_link101 pico_cdc_serial pico_ddsm)
+target_compile_options(calibration_firmware PRIVATE -Wall -Wextra)
+pico_add_extra_outputs(calibration_firmware)
