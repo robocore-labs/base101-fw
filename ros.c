@@ -54,11 +54,16 @@ static void sample_imu(void) {
     status_set_mode(yaw.calibrated && yaw.fresh ? STATUS_READY : STATUS_WAITING);
 }
 
-// Encoder integration is independent of IMU availability and gyro bias.
+// Front encoders supply forward speed; calibrated gyro supplies body yaw rate.
+// Wheel-derived yaw is deliberately replaced, so ICR is not applied to the gyro.
+static bool odometry_inputs(uint64_t now, double *vx, double *wz) {
+    return wheels_odometry_twist(now, vx, wz) && wheels_yaw_rate(now, wz);
+}
+
 static void update_odometry(void) {
     uint64_t now = time_us_64();
     double vx = 0, wz = 0;
-    bool valid = wheels_measured_twist(now, &vx, &wz);
+    bool valid = odometry_inputs(now, &vx, &wz);
     odometry_update(&odom, now, vx, wz, valid, ODOM_MAX_DT_US);
 }
 
@@ -163,7 +168,7 @@ static void publish_odometry(void) {
     uint64_t now = time_us_64();
     double measured_v, measured_w;
     if (!odom.valid || now < odom.sample_us || now - odom.sample_us > ODOM_MAX_DT_US ||
-        !wheels_measured_twist(now, &measured_v, &measured_w) || !stamp_at(odom.sample_us, &stamp)) return;
+        !odometry_inputs(now, &measured_v, &measured_w) || !stamp_at(odom.sample_us, &stamp)) return;
     ros_Odometry msg = {0};
     msg.header.stamp = stamp;
     msg.header.frame_id = ODOM_FRAME_ID;
@@ -175,7 +180,7 @@ static void publish_odometry(void) {
     msg.twist.twist.linear.x = odom.vx;
     msg.twist.twist.angular.z = odom.wz;
     msg.pose.covariance[0] = msg.pose.covariance[7] = 0.05;
-    msg.pose.covariance[35] = 0.1; // Wheel yaw on skid steer is sensitive to slip.
+    msg.pose.covariance[35] = 0.1; // Nominal yaw uncertainty; integrated gyro can drift.
     msg.pose.covariance[14] = msg.pose.covariance[21] = msg.pose.covariance[28] = 1e6;
     msg.twist.covariance[0] = 0.01;
     msg.twist.covariance[35] = 0.05;

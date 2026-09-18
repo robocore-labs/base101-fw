@@ -75,6 +75,19 @@ bool wheels_measured_twist(uint64_t now_us, double *linear_m_s, double *angular_
     return true;
 }
 
+bool wheels_odometry_twist(uint64_t now_us, double *linear_m_s, double *angular_rad_s) {
+    // WHEELS[0/1] are front-left/front-right; speeds already include mounting direction.
+    for (uint8_t i = 0; i < 2; i++) {
+        if (!online[i] || !measured_valid[i] || now_us < measured_us[i] ||
+            now_us - measured_us[i] > ODOM_FEEDBACK_MAX_AGE_US) return false;
+    }
+    double left = measured[0] * ODOM_ENCODER_SIGN;
+    double right = measured[1] * ODOM_ENCODER_SIGN;
+    *linear_m_s = (left + right) * 0.5;
+    *angular_rad_s = (right - left) / (controller.cfg.separation * controller.cfg.icr);
+    return true;
+}
+
 bool wheels_yaw_rate(uint64_t now_us, double *rate) {
     return gyro_yaw_get(&gyro, now_us, rate);
 }

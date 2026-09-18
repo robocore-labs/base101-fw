@@ -134,7 +134,7 @@ static const wheel_cfg_t WHEELS[WHEEL_COUNT] = {
 #define TIME_SYNC_MAX_RTT_US      20000
 #define TIME_SYNC_TIMEOUT_MS      10000
 
-// Odometry: encoder-only translation and differential wheel yaw.
+// ROS odometry: front-wheel encoder translation and bias-corrected gyro yaw.
 #define TOPIC_ODOM           "odom"
 #define TOPIC_ODOM_RESET     "odom/reset" // std_msgs/Bool: true resets pose only
 #define ODOM_FRAME_ID        "odom"
