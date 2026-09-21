@@ -345,7 +345,7 @@ available here.
 #define GLIDE_YAW_LPF_HZ      20.0f
 #define GLIDE_ZERO_MODE       GLIDE_ZERO_COAST
 
-#define TOPIC_CMD_VEL         "cmd_vel"
+#define TOPIC_CMD_VEL         "/link101/cmd_vel"
 ```
 
 Wheel lateral offsets come from `WHEEL_LATERAL_M` and the existing
@@ -676,19 +676,10 @@ has actually been measured over a known path.
 
 ### D.4 Who publishes TF
 
-**Decide explicitly, and only one of them does it.** Two nodes publishing
-`odom → base_link` produces a TF tree that flickers between two answers and
-symptoms that look like anything but the real cause.
-
-Firmware publishing it is simplest given the board is time synced. If the host
-later runs `robot_localization` fusing `/odom` and `/imu`, the EKF owns that
-transform and firmware must stop. Put it behind a `robot.h` flag so the switch
-is one constant rather than a code change:
-
-```c
-#define PUBLISH_ODOM_TF   true
-#define TOPIC_ODOM        "odom"
-```
+The host `robot_localization` EKF owns `odom -> base_link`. Firmware publishes
+front-wheel encoder-only odometry on `/link101/odom/raw` and publishes no TF.
+This prevents duplicate transforms and keeps the wheel and IMU observations
+independent for host-side fusion.
 
 ### D.5 Reset
 

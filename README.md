@@ -7,11 +7,11 @@ zenoh through Pico-ROS and zenoh-pico. Robot configuration is in `robot.h`.
 
 | Direction | Topic | Type | Behavior |
 |---|---|---|---|
-| sub | `/cmd_vel` | `geometry_msgs/TwistStamped` | Body velocity: twist.linear.x in m/s, twist.angular.z in rad/s. |
-| pub | `/imu` | `sensor_msgs/Imu` | Acceleration and angular velocity, up to 50 Hz. |
-| pub | `/imu/mag` | `sensor_msgs/MagneticField` | Magnetic field in tesla. |
-| pub | `/imu/temperature` | `sensor_msgs/Temperature` | IMU die temperature in Celsius. |
-| pub | `/imu/status` | `std_msgs/String` | Sensor initialization, identity probes, sync and read/publish counters, 1 Hz. |
+| sub | `/link101/cmd_vel` | `geometry_msgs/TwistStamped` | Body velocity: twist.linear.x in m/s, twist.angular.z in rad/s. |
+| pub | `/link101/imu` | `sensor_msgs/Imu` | Acceleration and angular velocity, up to 50 Hz. |
+| pub | `/link101/imu/mag` | `sensor_msgs/MagneticField` | Magnetic field in tesla. |
+| pub | `/link101/imu/temperature` | `sensor_msgs/Temperature` | IMU die temperature in Celsius. |
+| pub | `/link101/imu/status` | `std_msgs/String` | Sensor initialization, identity probes, sync and read/publish counters, 1 Hz. |
 
 The `twist` body velocity in cmd_vel is allocated as `(linear.x - angular.z * separation / 2) / radius`
 for the left wheels and `(linear.x + angular.z * separation / 2) / radius`
@@ -65,42 +65,33 @@ retry while motion remains blocked. Bias is held in RAM and remeasured each boot
 No heading or absolute yaw is calibrated. Gyro sign +1 was verified using a
 positive-turn pulse before enabling the feedback loop.
 
-`/imu/status` reports `yaw_cal=keep_still` or `ready`, `cal_s`, `cal_samples`,
+`/link101/imu/status` reports `yaw_cal=keep_still` or `ready`, `cal_s`, `cal_samples`,
 `cal_rejected`, `bias`, `gyro_fresh`, `yaw_rate`, `yaw_corr` and `saturated`.
 LEDs stay yellow until calibration is ready and gyro data is fresh, then green.
-`/imu` and temperature publication wait for calibration; mag publication remains
-independent. `/imu` Z angular velocity is the same corrected/filtered yaw rate
+`/link101/imu` and temperature publication wait for calibration; mag publication remains
+independent. `/link101/imu` Z angular velocity is the same corrected/filtered yaw rate
 used by glide; other gyro axes remain raw. To recalibrate without rebooting:
 
 ```bash
-ros2 topic pub --once /axon/gyro_calibrate std_msgs/msg/Bool '{data: true}'
+ros2 topic pub --once /link101/gyro_calibrate std_msgs/msg/Bool '{data: true}'
 ```
 
 This brakes all wheels and starts a new stationary window without resetting pose.
 
-Odometry publishes `/odom` (`nav_msgs/msg/Odometry`) at 50 Hz, with `odom`
-as the parent and `base_link` as the child. Linear velocity is the mean of all
-four measured wheel speeds, corrected for motor polarity and wheel radius;
-yaw is `(right_mean - left_mean) / wheel_separation`. Both velocities use
-encoder feedback only; commands and IMU data never enter the odometry estimate.
-Motor polarity is +1 on the left and -1 on the right, corrected after the
-observed physical forward/back reversal. Commands and encoder feedback use
-the same polarity; `ODOM_ENCODER_SIGN` is +1 (no additional sign inversion). Wheel-derived yaw on this skid steer
-is sensitive to floor slip and effective track width. Midpoint heading and trapezoidal velocities integrate
-x/y/yaw using monotonic elapsed time. All four healthy motor replies must be
-less than 100 ms old. Missing inputs or integration gaps over 50 ms break the
-interval; recovery does not extrapolate across missing data. Pose holds during
-these gaps and `/odom`/TF publishing pauses while inputs are invalid or stale.
+Odometry publishes `/link101/odom/raw` (`nav_msgs/msg/Odometry`) at 50 Hz,
+with `odom` as the parent and `base_link` as the child. It is deliberately raw:
+linear and angular velocity come only from the front-left and front-right motor
+encoder speeds, corrected for motor polarity, wheel radius, effective separation
+and `k_icr`. Midpoint heading and trapezoidal velocity integration produce a
+basic wheel pose. The IMU does not enter this estimate. Both front-wheel replies
+must be less than 100 ms old; missing inputs or integration gaps over 50 ms break
+the interval without stale extrapolation.
 
-`/tf` broadcasts the matching `odom -> base_link` pose and stamp at 50 Hz.
-`PUBLISH_ODOM_TF` in `robot.h` defaults true; disable it if a host EKF owns that
-transform. `/odom/reset` (`std_msgs/msg/Bool`, `data: true`) resets only pose,
-without releasing brakes, changing commands or altering gyro calibration.
-Only the yaw controller and `/imu` use the signed, calibrated gyro; odometry
-remains independent of gyro bias and control correction. Encoder odometry
-does not require a working IMU. Pose yaw covariance
-is 0.1 and twist yaw-rate covariance is 0.05 to reflect wheel slip; remaining
-nominal covariances follow step D in `specs.md`.
+The firmware does not publish TF. A host EKF should fuse `/link101/odom/raw` with
+`/link101/imu`, publish the fused `/odom`, and be the sole publisher of
+`odom -> base_link`. `/link101/odom/reset` (`std_msgs/msg/Bool`, `data: true`)
+resets only the raw wheel pose without changing commands or gyro calibration.
+Pose yaw covariance is 0.1 and twist yaw-rate covariance is 0.05 to reflect skid.
 All stamped publications require fresh host clock synchronization; sampling and
 integration continue without it.
 
@@ -122,7 +113,7 @@ actual sampling rate. There is no FIFO: intermediate samples are not buffered
 or averaged. The magnetometer remains at 100 Hz.
 
 IMU timestamps use synchronized host system time (see Clock synchronization below).
-`/imu` has no orientation estimate
+`/link101/imu` has no orientation estimate
 (`orientation_covariance[0] = -1`); acceleration includes gravity. Sensor
 initialization failures are logged, and missing sensors publish no readings.
 
@@ -131,7 +122,7 @@ are disabled and LEDs show status. The standalone `imu_diagnostic` instead
 uses its single port for continuous sensor readings. The previous lidar USB
 passthrough is preserved in `attic/lidar/` and is not built or initialized.
 
-To diagnose missing IMU data, run `ros2 topic echo /imu/status`.
+To diagnose missing IMU data, run `ros2 topic echo /link101/imu/status`.
 This status topic does not require clock synchronization. WHO_AM_I `0x6C`
 is expected at 0x6B or 0x6A; identity probes refresh after each initialization attempt.
 `lsm6dsox=offline` means initialization failed. An online sensor with increasing
@@ -148,8 +139,8 @@ simulation `/clock` bridge. Ensure the host itself has the desired time source
 (e.g. NTP). For the drive container, after starting it:
 
 ```bash
-docker cp tools/time_sync_host.py base101-drive-1:/tmp/axon_time_sync.py
-docker exec -it base101-drive-1 bash -lc 'source /opt/ros/jazzy/setup.bash; python3 /tmp/axon_time_sync.py'
+docker cp tools/time_sync_host.py base101-drive-1:/tmp/link101_time_sync.py
+docker exec -it base101-drive-1 bash -lc 'source /opt/ros/jazzy/setup.bash; python3 /tmp/link101_time_sync.py'
 ```
 
 For regular use, launch this helper with the robot stack. Only one time-server
@@ -157,8 +148,8 @@ instance should serve a board. It adds these topics:
 
 | Direction at firmware | Topic | Type | Payload |
 |---|---|---|---|
-| pub | `/axon/time_sync/request` | `std_msgs/UInt64` | Board transmit time, monotonic microseconds. |
-| sub | `/axon/time_sync/response` | `std_msgs/Int64MultiArray` | `[echoed_board_us, host_receive_ns, host_send_ns]`, empty layout. |
+| pub | `/link101/time_sync/request` | `std_msgs/UInt64` | Board transmit time, monotonic microseconds. |
+| sub | `/link101/time_sync/response` | `std_msgs/Int64MultiArray` | `[echoed_board_us, host_receive_ns, host_send_ns]`, empty layout. |
 
 The board probes once per second, subtracts host processing time from the
 round trip, and assumes symmetric transport to estimate the clock offset.
@@ -192,9 +183,16 @@ cc -std=c11 -Wall -Wextra -Werror -fsanitize=undefined -I. time_sync.c tests/tim
 PIO state machines are claimed at initialization: eight for wheel UARTs and
 one for the LEDs. The archived servo bus is not initialized.
 
-USB (VID:PID `1209:AC01`) presents one port: `RoboCore Axon Zenoh` in normal
-firmware, or `RoboCore Axon Debug` in the diagnostic image. The udev rules
+USB (VID:PID `1209:AC01`) presents one port: `RoboCore Link101 Zenoh` in normal
+firmware, or `RoboCore Link101 Debug` in the diagnostic image. The udev rules
 below provide the corresponding stable name.
+
+The normal firmware also treats the time-sync exchange as a host heartbeat.
+The watchdog remains disabled until the first valid host response. After that,
+60 seconds without a valid response
+brakes every wheel and reboots the RP2350, forcing USB and Zenoh to establish a
+fresh session when the Docker stack returns. Transport errors alone never
+trigger a reboot.
 
 ## Building
 
@@ -236,7 +234,7 @@ Hold BOOT while plugging in, then copy `build/imu_diagnostic.uf2` to the
 `RPI-RP2` drive. This replaces the normal firmware; flash
 `base101_firmware.uf2` again to restore robot operation.
 
-Read the diagnostic's sole USB port with `screen /dev/axon-debug 115200`
+Read the diagnostic's sole USB port with `screen /dev/link101-debug 115200`
 (or its `/dev/ttyACM*` device if udev rules are absent). This image replaces
 the zenoh interface with diagnostic text; normal firmware has no debug port.
 Motors and ROS are never initialized. Detection status repeats every second;
@@ -261,8 +259,8 @@ address/WHO_AM_I diagnostics if the accelerometer/gyro stays offline.
 
 gives the single port a stable symlink:
 
-- Normal firmware: `/dev/axon-zenoh` for zenoh.
-- Diagnostic firmware: `/dev/axon-debug` for sensor readings.
+- Normal firmware: `/dev/link101-zenoh` for zenoh.
+- Diagnostic firmware: `/dev/link101-debug` for sensor readings.
 
 Re-run the installer after updating the rules and reconnect the board.
 
@@ -278,7 +276,7 @@ with that feature on top of `eclipse/zenoh:latest`:
 
 ```bash
 cd docker
-docker compose up --build      # maps /dev/axon-zenoh, listens serial + tcp/7447
+docker compose up --build      # maps /dev/link101-zenoh, listens serial + tcp/7447
 ```
 
 From source instead:
@@ -287,7 +285,7 @@ From source instead:
 git clone https://github.com/eclipse-zenoh/zenoh && cd zenoh
 cargo build --release -p zenohd --features transport_serial
 # the baudrate token is required by the locator syntax, and meaningless on USB CDC
-./target/release/zenohd -l 'serial//dev/axon-zenoh#baudrate=921600'
+./target/release/zenohd -l 'serial//dev/link101-zenoh#baudrate=921600'
 ```
 
 Keep the router protocol-compatible with the vendored zenoh-pico (currently
@@ -297,19 +295,19 @@ Keep the router protocol-compatible with the vendored zenoh-pico (currently
 
 ```bash
 # option A: single router — also listen on the tcp port rmw_zenoh expects
-zenohd -l 'serial//dev/axon-zenoh#baudrate=921600' -l 'tcp/[::]:7447'
+zenohd -l 'serial//dev/link101-zenoh#baudrate=921600' -l 'tcp/[::]:7447'
 
 # option B: keep rmw_zenohd, and federate the serial router into it
-zenohd -l 'serial//dev/axon-zenoh#baudrate=921600' -e 'tcp/localhost:7447'
+zenohd -l 'serial//dev/link101-zenoh#baudrate=921600' -e 'tcp/localhost:7447'
 ```
 
 Then, with `RMW_IMPLEMENTATION=rmw_zenoh_cpp`:
 
 ```bash
 ros2 topic list
-ros2 topic echo /imu
+ros2 topic echo /link101/imu
 # Continuous low-speed command; replace linear.x with 0.0 to test a ramped stop.
-ros2 topic pub -r 20 /cmd_vel geometry_msgs/msg/TwistStamped '{header: auto, twist: {linear: {x: 0.1}, angular: {z: 0.0}}}'
+ros2 topic pub -r 20 /link101/cmd_vel geometry_msgs/msg/TwistStamped '{header: auto, twist: {linear: {x: 0.1}, angular: {z: 0.0}}}'
 ```
 
 ## Libraries
@@ -350,7 +348,7 @@ itself.
 
 Build with `picobuild`, then flash **explicitly** with
 `picoflash build/motor_terminal.uf2`. The single USB CDC identifies as
-`Axon Motor Terminal` / `RoboCore Axon Debug`; ROS is not linked into this target.
+`Link101 Motor Terminal` / `RoboCore Link101 Debug`; ROS is not linked into this target.
 Connect with `python3 tools/motor_terminal.py /dev/ttyACM0` (use the actual port).
 `help` prints the command list; `quit` or Ctrl-C in this client sends electric brake.
 

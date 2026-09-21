@@ -107,7 +107,7 @@ static const wheel_cfg_t WHEELS[WHEEL_COUNT] = {
 #define GYRO_CALIBRATION_MAX_BIAS   0.05
 #define GYRO_CALIBRATION_MAX_STDDEV 0.003
 #define GYRO_MAX_AGE_US             50000u
-#define TOPIC_GYRO_CALIBRATE        "axon/gyro_calibrate" // Bool true: brake, restart 15s calibration.
+#define TOPIC_GYRO_CALIBRATE        "link101/gyro_calibrate" // Bool true: brake, restart 15s calibration.
 
 // ===========================================================================
 //  ROS
@@ -115,32 +115,33 @@ static const wheel_cfg_t WHEELS[WHEEL_COUNT] = {
 //
 // Active ROS interface: cmd_vel subscription and onboard IMU publishers.
 
-#define NODE_NAME        "axon"
+#define NODE_NAME        "link101"
 #define ROS_DOMAIN_ID    0
 #define ZENOH_MODE       "client"
 #define ZENOH_LOCATOR    "serial/cdc#baudrate=921600"
 
-#define TOPIC_CMD_VEL        "cmd_vel"
-#define TOPIC_IMU            "imu"
-#define TOPIC_IMU_MAG        "imu/mag"
-#define TOPIC_IMU_TEMP       "imu/temperature"
-#define TOPIC_IMU_STATUS     "imu/status"
+#define TOPIC_CMD_VEL        "link101/cmd_vel"
+#define TOPIC_IMU            "link101/imu"
+#define TOPIC_IMU_MAG        "link101/imu/mag"
+#define TOPIC_IMU_TEMP       "link101/imu/temperature"
+#define TOPIC_IMU_STATUS     "link101/imu/status"
 #define IMU_STATUS_HZ        1
 
 // Four-timestamp exchange with tools/time_sync_host.py.
-#define TOPIC_TIME_SYNC_REQUEST   "axon/time_sync/request"
-#define TOPIC_TIME_SYNC_RESPONSE  "axon/time_sync/response"
+#define TOPIC_TIME_SYNC_REQUEST   "link101/time_sync/request"
+#define TOPIC_TIME_SYNC_RESPONSE  "link101/time_sync/response"
 #define TIME_SYNC_HZ              1
 #define TIME_SYNC_MAX_RTT_US      20000
 #define TIME_SYNC_TIMEOUT_MS      10000
+// Once the host has answered at least once, a longer silence means that the
+// Docker/router side disappeared. Rebooting forces a clean USB + Zenoh session.
+#define ROS_HOST_RESTART_TIMEOUT_MS 60000
 
-// ROS odometry: front-wheel encoder translation and bias-corrected gyro yaw.
-#define TOPIC_ODOM           "odom"
-#define TOPIC_ODOM_RESET     "odom/reset" // std_msgs/Bool: true resets pose only
+// Raw wheel odometry for host-side fusion: front-wheel translation and yaw.
+#define TOPIC_ODOM           "link101/odom/raw"
+#define TOPIC_ODOM_RESET     "link101/odom/reset" // std_msgs/Bool: true resets pose only
 #define ODOM_FRAME_ID        "odom"
 #define ODOM_CHILD_FRAME_ID  "base_link"
-#define PUBLISH_ODOM_TF      true // Disable when a host EKF owns this transform.
-#define TOPIC_TF             "tf"
 #define ODOM_HZ              50
 #define ODOM_ENCODER_SIGN    1.0 // Commands and feedback share the physical motor polarity.
 #define IMU_SAMPLE_HZ        208

@@ -160,24 +160,24 @@ ST3215/arm, old servo telemetry and legacy ROS scaffolding preserved in
 `attic/arm`; not linked. Lidar passthrough preserved in `attic/lidar`; not built.
 
 Active topics:
-- Subscribe `/cmd_vel`: geometry_msgs/msg/TwistStamped, use linear.x/angular.z.
-- Publish `/imu`, `/imu/mag`, `/imu/temperature`, `/imu/status`.
-- Publish `/odom`: nav_msgs/msg/Odometry.
-- Publish `/tf`: matching odom -> base_link, configurable `PUBLISH_ODOM_TF` true.
-- Subscribe `/odom/reset`: std_msgs/msg/Bool, true resets pose only.
-- Subscribe `/axon/gyro_calibrate`: std_msgs/msg/Bool, true brakes all wheels
+- Subscribe `/link101/cmd_vel`: geometry_msgs/msg/TwistStamped, use linear.x/angular.z.
+- Publish `/link101/imu`, `/link101/imu/mag`, `/link101/imu/temperature`, `/link101/imu/status`.
+- Publish `/link101/odom/raw`: nav_msgs/msg/Odometry, front-wheel encoder-only.
+- Firmware publishes no TF; the host EKF owns odom -> base_link.
+- Subscribe `/link101/odom/reset`: std_msgs/msg/Bool, true resets raw pose only.
+- Subscribe `/link101/gyro_calibrate`: std_msgs/msg/Bool, true brakes all wheels
   and restarts stationary calibration, without resetting odometry pose.
 
 TwistStamped header is not used for command freshness; watchdog uses reception.
 IMU orientation covariance[0] remains -1; no attitude/orientation fusion.
 
 Clock exchange:
-- Firmware `/axon/time_sync/request`: UInt64, MCU monotonic microseconds, 1 Hz.
-- Host `/axon/time_sync/response`: Int64MultiArray, empty layout, data_offset 0,
+- Firmware `/link101/time_sync/request`: UInt64, MCU monotonic microseconds, 1 Hz.
+- Host `/link101/time_sync/response`: Int64MultiArray, empty layout, data_offset 0,
   exactly [echo_us, host_receive_ns, host_send_ns]. Host system wall time.
 - Midpoint estimate, reject RTT >20 ms; synchronization expires after 10 s.
 - Stamped publication requires fresh valid sync. IMU sampling and odometry
-  integration continue independently of sync. `/imu/status` always publishes.
+  integration continue independently of sync. `/link101/imu/status` always publishes.
 - Host node is `/base101_time`; helper specification/example in
   `tools/time_sync_host.py`. Zenoh router clocks do not replace this exchange.
 

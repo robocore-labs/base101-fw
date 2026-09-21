@@ -1,0 +1,37 @@
+# udev rules for the RoboCore Link101 board
+#
+# The normal firmware has one CDC port: /dev/link101-zenoh.
+# Standalone diagnostic targets expose /dev/link101-debug.
+#
+# Installation:
+#   sudo cp 99-link101-devices.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="ac01", ATTRS{product}=="Link101 ROS Node", ENV{ID_USB_INTERFACE_NUM}=="00", \
+    SYMLINK+="link101-zenoh", MODE="0660", GROUP="dialout", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Compatibility for boards that have not yet received the renamed descriptor.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="ac01", ATTRS{product}=="Axon ROS Node", ENV{ID_USB_INTERFACE_NUM}=="00", \
+    SYMLINK+="link101-zenoh", MODE="0660", GROUP="dialout", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="ac01", ATTRS{product}=="Link101 IMU Diagnostic", ENV{ID_USB_INTERFACE_NUM}=="00", \
+    SYMLINK+="link101-debug", MODE="0660", GROUP="dialout", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="ac01", ATTRS{product}=="Link101 Motor Terminal", ENV{ID_USB_INTERFACE_NUM}=="00", \
+    SYMLINK+="link101-debug", MODE="0660", GROUP="dialout", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="ac01", ATTRS{product}=="Axon IMU Diagnostic", ENV{ID_USB_INTERFACE_NUM}=="00", \
+    SYMLINK+="link101-debug", MODE="0660", GROUP="dialout", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="ac01", ATTRS{product}=="Axon Motor Terminal", ENV{ID_USB_INTERFACE_NUM}=="00", \
+    SYMLINK+="link101-debug", MODE="0660", GROUP="dialout", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# RP2350 / RP2040 in BOOTSEL mode (ROM bootloader, Raspberry Pi vendor ID).
+# picotool talks to this raw USB (PICOBOOT) device, so without these it fails
+# with "unable to connect ... try sudo". uaccess grants the logged-in user;
+# MODE/GROUP are a fallback for non-logind setups and already-attached devices.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="000f", \
+    MODE="0666", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", ATTRS{idProduct}=="0003", \
+    MODE="0666", GROUP="plugdev", TAG+="uaccess"
+
+# Jetson 40-pin header UART (ttyTHS1, Tegra UARTA at 3100000.serial).
+# ModemManager tags every tty as a candidate and will probe it with AT
+# commands if it's ever unbound/replugged; this isn't a modem, so opt it out.
+SUBSYSTEM=="tty", KERNELS=="3100000.serial:0.0", ENV{ID_MM_DEVICE_IGNORE}="1"

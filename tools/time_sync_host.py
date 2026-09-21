@@ -9,14 +9,14 @@ from std_msgs.msg import Int64MultiArray, UInt64
 
 class TimeSyncHost(Node):
     def __init__(self):
-        super().__init__("axon_time_sync")
+        super().__init__("link101_time_sync")
         # Real robot wall clock, independent of use_sim_time or /clock.
         self.wall_clock = Clock(clock_type=ClockType.SYSTEM_TIME)
         self.response = self.create_publisher(
-            Int64MultiArray, "/axon/time_sync/response", 1)
+            Int64MultiArray, "/link101/time_sync/response", 1)
         self.request = self.create_subscription(
-            UInt64, "/axon/time_sync/request", self.on_request, 1)
-        self.get_logger().info("Serving Axon clock probes using host system time")
+            UInt64, "/link101/time_sync/request", self.on_request, 1)
+        self.get_logger().info("Serving Link101 clock probes using host system time")
 
     def on_request(self, request):
         received_ns = self.wall_clock.now().nanoseconds

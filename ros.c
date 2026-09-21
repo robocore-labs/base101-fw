@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "pico/stdlib.h"
+#include "hardware/watchdog.h"
 #include "cdc_serial.h"
 #include "easypicoros.h"
 #include "serial_hook.h"
@@ -24,7 +25,7 @@ static easyp_publisher_t *imu_mag_pub;
 static easyp_publisher_t *imu_temp_pub;
 static easyp_publisher_t *imu_status_pub;
 static uint32_t imu_publish_failures;
-static easyp_publisher_t *odom_pub, *tf_pub;
+static easyp_publisher_t *odom_pub;
 static odometry_t odom;
 static imu_sample_t latest_imu;
 static uint64_t latest_imu_us;
@@ -54,10 +55,10 @@ static void sample_imu(void) {
     status_set_mode(yaw.calibrated && yaw.fresh ? STATUS_READY : STATUS_WAITING);
 }
 
-// Front encoders supply forward speed; calibrated gyro supplies body yaw rate.
-// Wheel-derived yaw is deliberately replaced, so ICR is not applied to the gyro.
+// Raw odometry uses only the front encoder pair. The host EKF independently
+// fuses this with /link101/imu, so gyro data must not enter this estimate.
 static bool odometry_inputs(uint64_t now, double *vx, double *wz) {
-    return wheels_odometry_twist(now, vx, wz) && wheels_yaw_rate(now, wz);
+    return wheels_odometry_twist(now, vx, wz);
 }
 
 static void update_odometry(void) {
@@ -73,6 +74,8 @@ static int64_t time_sync_values[3];
 static ros_Int64MultiArray time_sync_response = {
     .data = { .data = time_sync_values, .n_elements = 3 },
 };
+static bool host_seen;
+static uint64_t last_host_response_us;
 
 static void on_time_sync(void *msg, void *unused) {
     (void)unused;
@@ -80,8 +83,12 @@ static void on_time_sync(void *msg, void *unused) {
     if (response->data.n_deserialized != 3 || response->layout.data_offset != 0) {
         return;
     }
-    time_sync_accept(&ros_clock, response->data.data[0],
-                     response->data.data[1], response->data.data[2], time_us_64());
+    uint64_t now = time_us_64();
+    if (time_sync_accept(&ros_clock, response->data.data[0],
+                         response->data.data[1], response->data.data[2], now)) {
+        host_seen = true;
+        last_host_response_us = now;
+    }
 }
 
 static void time_sync_update(void) {
@@ -111,6 +118,18 @@ static void brake_wheels(void) {
     for (uint8_t i = 0; i < WHEEL_COUNT; i++) {
         wheels_brake(i);
     }
+}
+
+static void restart_for_connection_loss(const char *reason) {
+    brake_wheels();
+    status_set_mode(STATUS_WAITING);
+    status_printf("[ros  ] %s; braking and rebooting for a clean session\n", reason);
+    // Give the four brake frames and status message a chance to leave before
+    // the RP2350 watchdog resets USB and the Zenoh client.
+    absolute_time_t until = make_timeout_time_ms(50);
+    while (!time_reached(until)) io_poll();
+    watchdog_reboot(0, 0, 0);
+    while (true) tight_loop_contents();
 }
 
 static void on_cmd_vel(void *msg, void *unused) {
@@ -180,23 +199,13 @@ static void publish_odometry(void) {
     msg.twist.twist.linear.x = odom.vx;
     msg.twist.twist.angular.z = odom.wz;
     msg.pose.covariance[0] = msg.pose.covariance[7] = 0.05;
-    msg.pose.covariance[35] = 0.1; // Nominal yaw uncertainty; integrated gyro can drift.
+    msg.pose.covariance[35] = 0.1; // Wheel yaw remains sensitive to skid.
     msg.pose.covariance[14] = msg.pose.covariance[21] = msg.pose.covariance[28] = 1e6;
     msg.twist.covariance[0] = 0.01;
     msg.twist.covariance[35] = 0.05;
     msg.twist.covariance[7] = msg.twist.covariance[14] =
         msg.twist.covariance[21] = msg.twist.covariance[28] = 1e6;
-    if (!easyp_publish(odom_pub, &msg)) return;
-    if (PUBLISH_ODOM_TF) {
-        ros_TransformStamped transform = {0};
-        transform.header = msg.header;
-        transform.child_frame_id = msg.child_frame_id;
-        transform.transform.translation.x = odom.x;
-        transform.transform.translation.y = odom.y;
-        transform.transform.rotation = msg.pose.pose.orientation;
-        ros_TFMessage tf = {.transforms = {.data = &transform, .n_elements = 1}};
-        easyp_publish(tf_pub, &tf);
-    }
+    easyp_publish(odom_pub, &msg);
 }
 
 // The two chips are independent, so this publishes whatever answered: the
@@ -317,8 +326,7 @@ bool ros_begin(void) {
         return false;
     }
     odom_pub = easyp_publisher_create(TOPIC_ODOM, EASYP_TYPE(ros_Odometry));
-    if (PUBLISH_ODOM_TF) tf_pub = easyp_publisher_create(TOPIC_TF, EASYP_TYPE(ros_TFMessage));
-    if (!odom_pub || (PUBLISH_ODOM_TF && !tf_pub) ||
+    if (!odom_pub ||
         !easyp_subscriber_create(TOPIC_ODOM_RESET, EASYP_TYPE(ros_Bool), on_odom_reset, NULL)) return false;
     imu_pub = easyp_publisher_create(TOPIC_IMU, EASYP_TYPE(ros_Imu));
     imu_mag_pub = easyp_publisher_create(TOPIC_IMU_MAG, EASYP_TYPE(ros_MagneticField));
@@ -342,12 +350,19 @@ void ros_update(void) {
     static uint64_t imu_due = 0;
     static uint64_t imu_status_due = 0;
     static uint64_t odom_due = 0;
+    // A transient serial error is not sufficient evidence for rebooting: USB
+    // and Docker can briefly disappear during startup. The accepted host
+    // heartbeat below is the sole restart authority.
     easyp_spin_once();
     cmd_vel_watchdog();
     time_sync_update();
     sample_imu();
     update_odometry();
     uint64_t now = time_us_64();
+    if (host_seen && now - last_host_response_us >=
+                         (uint64_t)ROS_HOST_RESTART_TIMEOUT_MS * 1000u) {
+        restart_for_connection_loss("host heartbeat expired");
+    }
     if (now >= imu_status_due) {
         imu_status_due = now + 1000000u / IMU_STATUS_HZ;
         publish_imu_status();

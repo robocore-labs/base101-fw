@@ -12,7 +12,7 @@ This directory builds an image that:
 
 ## Prerequisites
 
-- The udev symlink `/dev/axon-zenoh` (run `../install.sh` once on the host).
+- The udev symlink `/dev/link101-zenoh` (run `../install.sh` once on the host).
 - The router version must be protocol-compatible with the firmware's vendored
   zenoh-pico — currently **1.9.0** (`lib/zenoh-pico/include/zenoh-pico.h`).
   Bump `ZENOH_REF` in `docker-compose.yml` / `--build-arg` if you change it.
@@ -30,13 +30,13 @@ or with plain Docker:
 cd docker
 docker build -t axon-zenohd --build-arg ZENOH_REF=1.9.0 .
 docker run --rm -it --network host \
-    --device /dev/axon-zenoh:/dev/axon-zenoh \
+    --device /dev/link101-zenoh:/dev/link101-zenoh \
     axon-zenohd
 ```
 
 The container listens on:
 
-- `serial//dev/axon-zenoh#baudrate=921600` — the board
+- `serial//dev/link101-zenoh#baudrate=921600` — the board
 - `tcp/[::]:7447` — for rmw_zenoh
 
 (see `zenoh-serial.json5`; edit it to change endpoints).
@@ -101,6 +101,6 @@ directly.
 - **glibc:** the binary is built on `rust:bookworm` and the base image is
   Debian-based, so they're compatible. If you change the base to a musl/Alpine
   image, build the binary with a matching target instead.
-- **Wrong device:** if `/dev/axon-zenoh` doesn't exist, find the port with
-  `ls -l /dev/serial/by-id/` and map that node to `/dev/axon-zenoh` in the
+- **Wrong device:** if `/dev/link101-zenoh` doesn't exist, find the port with
+  `ls -l /dev/serial/by-id/` and map that node to `/dev/link101-zenoh` in the
   compose `devices:` list.

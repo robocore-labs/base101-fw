@@ -57,17 +57,17 @@ static char const *string_desc_arr[] = {
     [STR_IDX_LANG]    = (const char[]){0x09, 0x04},
     [STR_IDX_MANUF]   = "RoboCore",
 #ifdef MOTOR_TERMINAL
-    [STR_IDX_PRODUCT] = "Axon Motor Terminal",
+    [STR_IDX_PRODUCT] = "Link101 Motor Terminal",
 #elif defined(IMU_DIAGNOSTIC)
-    [STR_IDX_PRODUCT] = "Axon IMU Diagnostic",
+    [STR_IDX_PRODUCT] = "Link101 IMU Diagnostic",
 #else
-    [STR_IDX_PRODUCT] = "Axon ROS Node",
+    [STR_IDX_PRODUCT] = "Link101 ROS Node",
 #endif
     [STR_IDX_SERIAL]  = NULL,
 #if defined(IMU_DIAGNOSTIC) || defined(MOTOR_TERMINAL)
-    [STR_IDX_CDC0]    = "RoboCore Axon Debug",
+    [STR_IDX_CDC0]    = "RoboCore Link101 Debug",
 #else
-    [STR_IDX_CDC0]    = "RoboCore Axon Zenoh",
+    [STR_IDX_CDC0]    = "RoboCore Link101 Zenoh",
 #endif
 };
 

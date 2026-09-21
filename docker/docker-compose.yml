@@ -14,12 +14,12 @@ services:
     # if you prefer a bridged network.
     network_mode: host
 
-    # Map the Axon zenoh serial port into the container. This relies on the
-    # udev rule that creates /dev/axon-zenoh (see ../99-axon-devices.rules and
+    # Map the Link101 zenoh serial port into the container. This relies on the
+    # udev rule that creates /dev/link101-zenoh (see ../99-link101-devices.rules and
     # ../install.sh). If you don't have the symlink, point at the raw node:
-    #   - "/dev/ttyACM0:/dev/axon-zenoh"
+    #   - "/dev/ttyACM0:/dev/link101-zenoh"
     devices:
-      - "/dev/ttyACM0:/dev/axon-zenoh"
+      - "/dev/link101-zenoh:/dev/link101-zenoh"
 
   # ROS 2 Jazzy test sidecar: rmw_zenoh client + rosboard web dashboard.
   # Connects to the router above (tcp/localhost:7447 via host networking) and

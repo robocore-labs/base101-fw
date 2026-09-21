@@ -56,8 +56,8 @@ void wheels_brake(uint8_t index);
 // within the freshness window; never substitutes command targets.
 bool wheels_measured_twist(uint64_t now_us, double *linear_m_s, double *angular_rad_s);
 
-// ROS body odometry from fresh, healthy front-left/front-right speed feedback.
-// Applies the calibrated ICR coefficient to yaw; no gyro fusion or rear averaging.
+// Raw ROS odometry input from fresh front-left/front-right speed feedback.
+// Applies the calibrated ICR coefficient to wheel yaw; no IMU or rear averaging.
 bool wheels_odometry_twist(uint64_t now_us, double *linear_m_s, double *angular_rad_s);
 
 // Where the wheel is now, in radians, counting full turns since boot.

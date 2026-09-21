@@ -106,6 +106,7 @@ target_link_libraries(base101_firmware
     pico_stdlib
     pico_unique_id
     hardware_i2c
+    hardware_watchdog
     tinyusb_device
     tinyusb_board
     hardware_link101

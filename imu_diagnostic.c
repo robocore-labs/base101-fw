@@ -1,4 +1,4 @@
-/* Standalone IMU bring-up on USB CDC #0 (/dev/axon-debug).
+/* Standalone IMU bring-up on USB CDC #0 (/dev/link101-debug).
  * Uses production sensor initialization; never initializes motors or ROS.
  */
 #include <math.h>
